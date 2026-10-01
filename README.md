@@ -67,15 +67,42 @@ java -jar build/libs/zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar
 
 ### CLI
 
-```
-com.zkmdeobf.Main <input.jar> [options]
+Running the jar with no arguments prints the full help, including every
+option, a worked example, what each counter means, and the exit codes.
 
-  -o, --output <file>    write the deobfuscated jar to this path
-      --map <file>       ZKM changelog used to restore exact member names
-      --rename           enable heuristic renaming (default: on)
-      --no-rename        keep obfuscated member names
-      --run <main.class> run a class from the produced jar
+```bash
+java -jar zkm-deobfuscator-1.0.0-all.jar
+java -jar zkm-deobfuscator-1.0.0-all.jar --help
+java -jar zkm-deobfuscator-1.0.0-all.jar --version
 ```
+
+```
+zkm-deobfuscator 1.0.0 - static deobfuscator for Zelix KlassMaster jars
+
+USAGE
+  java -jar zkm-deobfuscator.jar <input.jar> [options]
+
+OPTIONS
+  -o, --output <file>   Write the deobfuscated jar to this path.
+                        Without it the jar is analysed but not written.
+      --map <file>      ZKM changelog used to restore the exact original
+                        member names. Without it names are heuristics.
+      --rename          Enable heuristic renaming. This is the default.
+      --no-rename       Keep the obfuscated member names as they are.
+      --run <main>      Run a class from the produced jar after writing
+                        it, and report whether it exited cleanly.
+                        Requires --output.
+  -h, --help            Show this help and exit.
+  -V, --version         Show the version and exit.
+```
+
+Exit codes:
+
+| code | meaning |
+| --- | --- |
+| 0 | the run completed; check `str_skipped` and `int_unresolved` to see how much was left unresolved |
+| 1 | the run failed with an exception, or verification failed |
+| 2 | bad command line |
 
 ### A look at the transformation
 

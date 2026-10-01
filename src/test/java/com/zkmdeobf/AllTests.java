@@ -160,6 +160,61 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         System.out.println("des/long OK");
     }
 
+    static String runCli(String... cliArgs) throws Exception {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(System.getProperty("java.home") + "/bin/java");
+        cmd.add("-cp");
+        cmd.add(System.getProperty("java.class.path"));
+        cmd.add("com.zkmdeobf.Main");
+        cmd.addAll(Arrays.asList(cliArgs));
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        boolean done = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+        if (!done) {
+            p.destroyForcibly();
+            throw new AssertionError("cli timeout");
+        }
+        String out = new String(p.getInputStream().readAllBytes());
+        return out.replace("\r", "").trim();
+    }
+
+    static int runCliCode(String... cliArgs) throws Exception {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(System.getProperty("java.home") + "/bin/java");
+        cmd.add("-cp");
+        cmd.add(System.getProperty("java.class.path"));
+        cmd.add("com.zkmdeobf.Main");
+        cmd.addAll(Arrays.asList(cliArgs));
+        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+        p.getInputStream().readAllBytes();
+        return p.exitValue();
+    }
+
+    public static void testCliHelp() throws Exception {
+        String noArgs = runCli();
+        check(noArgs.contains("USAGE"), "bare call shows usage");
+        check(noArgs.contains("--no-rename"), "help lists --no-rename");
+        check(noArgs.contains("--map"), "help lists --map");
+        check(noArgs.contains("str_skipped"), "help explains str_skipped");
+        check(noArgs.contains("EXIT STATUS"), "help documents exit codes");
+
+        check(runCli().equals(noArgs), "bare call and --help agree");
+        check(runCli("--help").contains("USAGE"), "--help shows usage");
+        check(runCli("-h").contains("USAGE"), "-h shows usage");
+        check(runCli("--version").startsWith("zkm-deobfuscator "), "--version");
+        check(runCli("-V").startsWith("zkm-deobfuscator "), "-V");
+
+        check(runCliCode() == 0, "bare call exits 0");
+        check(runCliCode("--bogus") == 2, "unknown option exits 2");
+        check(runCliCode("a.jar", "-o") == 2, "missing -o value exits 2");
+        check(runCliCode("a.jar", "--map") == 2, "missing --map value exits 2");
+        check(runCliCode("a.jar", "--run") == 2, "missing --run value exits 2");
+        check(runCliCode("a.jar", "b.jar") == 2, "extra argument exits 2");
+        check(runCliCode("corpus/fixtures/demo3D-obf.jar", "--run", "a.a.a") == 2,
+                "--run without --output exits 2");
+        System.out.println("cli help OK");
+    }
+
     public static void testCorpusBytecodeTarget() throws Exception {
         int limit = 61;
         int scanned = 0;
@@ -2089,6 +2144,8 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         testTables();
         System.out.println("[step] testCorpusBytecodeTarget");
         testCorpusBytecodeTarget();
+        System.out.println("[step] testCliHelp");
+        testCliHelp();
         System.out.println("[step] testRefInline");
         testRefInline();
         System.out.println("[step] testRename");
