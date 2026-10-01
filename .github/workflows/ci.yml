@@ -48,9 +48,18 @@ jobs:
 
       - name: Java assertion suite
         run: |
-          ./gradlew corpusTest --no-daemon --info > /tmp/java-tests.log 2>&1 \
-            || { echo "===== java-tests.log (tail) ====="; tail -80 /tmp/java-tests.log; exit 1; }
-          tail -20 /tmp/java-tests.log
+          set +e
+          java -Xmx3g -cp "build/classes/java/main:build/classes/java/test:lib/asm-9.8.jar:lib/asm-tree-9.8.jar:lib/asm-commons-9.8.jar" \
+               com.zkmdeobf.AllTests > /tmp/java-tests.log 2>&1
+          rc=$?
+          tail -3 /tmp/java-tests.log
+          if [ "$rc" -ne 0 ]; then
+            echo ""
+            echo "FAILURE-DETAIL:"
+            tail -c 1200 /tmp/java-tests.log | tr '\n' '~' | sed 's/~/ | /g'
+            echo ""
+          fi
+          exit $rc
 
       - name: Python test suite
         run: |
