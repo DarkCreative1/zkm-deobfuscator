@@ -57,6 +57,8 @@ public final class ClassIO {
         return w.toByteArray();
     }
 
+    public static final long FIXED_TIME = 1000L * 60 * 60 * 24 * 365 * 30;
+
     public static void writeJar(String path, Map<String, byte[]> entries) throws IOException {
         File f = new File(path);
         File parent = f.getParentFile();
@@ -66,7 +68,9 @@ public final class ClassIO {
             List<String> names = new ArrayList<>(entries.keySet());
             Collections.sort(names);
             for (String n : names) {
-                out.putNextEntry(new JarEntry(n));
+                JarEntry e = new JarEntry(n);
+                e.setTime(FIXED_TIME);
+                out.putNextEntry(e);
                 out.write(entries.get(n));
                 out.closeEntry();
             }
