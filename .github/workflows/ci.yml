@@ -97,7 +97,17 @@ jobs:
 
       - name: Deobfuscate
         run: |
+          set +e
           java -Xmx3g -cp "build/classes/java/main:lib/asm-9.8.jar:lib/asm-tree-9.8.jar:lib/asm-commons-9.8.jar" \
                com.zkmdeobf.Main /tmp/thirdparty/commons-io.jar -o /tmp/thirdparty/out.jar \
-               > /tmp/deob.log 2>&1 || { echo "===== deob.log ====="; cat /tmp/deob.log; exit 1; }
-          cat /tmp/deob.log
+               > /tmp/deob.log 2>&1
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::deob.log"
+            cat /tmp/deob.log
+            echo "::endgroup::"
+            tail -c 900 /tmp/deob.log | tr '\n' '~' | sed 's/~/ | /g'
+            echo ""
+            exit "$rc"
+          fi
+          tail -3 /tmp/deob.log
