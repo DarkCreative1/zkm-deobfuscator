@@ -47,10 +47,16 @@ jobs:
         run: ./gradlew compileJava compileTestJava --no-daemon
 
       - name: Java assertion suite
-        run: ./gradlew corpusTest --no-daemon --info
+        run: |
+          ./gradlew corpusTest --no-daemon --info > /tmp/java-tests.log 2>&1 \
+            || { echo "===== java-tests.log (tail) ====="; tail -80 /tmp/java-tests.log; exit 1; }
+          tail -20 /tmp/java-tests.log
 
       - name: Python test suite
-        run: ./gradlew pyTest --no-daemon
+        run: |
+          ./gradlew pyTest --no-daemon > /tmp/py-tests.log 2>&1 \
+            || { echo "===== py-tests.log (tail) ====="; tail -40 /tmp/py-tests.log; exit 1; }
+          tail -10 /tmp/py-tests.log
 
       - name: Independent corpus verification
         run: python scripts/verify_corpus.py
