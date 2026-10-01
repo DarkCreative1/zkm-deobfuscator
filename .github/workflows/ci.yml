@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -38,11 +38,32 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Build
-        run: ./gradlew build --no-daemon
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-      - name: Verify corpus
+      - name: Compile
+        run: ./gradlew compileJava compileTestJava --no-daemon
+
+      - name: Java assertion suite
+        run: ./gradlew corpusTest --no-daemon --info
+
+      - name: Python test suite
+        run: ./gradlew pyTest --no-daemon
+
+      - name: Independent corpus verification
         run: python scripts/verify_corpus.py
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "### corpus"
+            ls -l corpus/jars/*/*.jar | awk '{print $5, $9}'
+            echo "### build dir"
+            ls -l build 2>/dev/null || echo "(no build dir)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   third-party-jars:
     name: Real-world jar smoke test
@@ -53,16 +74,20 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Compile
+        run: ./gradlew compileJava --no-daemon
 
       - name: Download a third-party jar
         run: |
           mkdir -p /tmp/thirdparty
           curl -fsSL -o /tmp/thirdparty/commons-io.jar \
             https://repo1.maven.org/maven2/commons-io/commons-io/2.15.1/commons-io-2.15.1.jar
+          ls -l /tmp/thirdparty/commons-io.jar
 
       - name: Deobfuscate
         run: |

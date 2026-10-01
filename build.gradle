@@ -49,6 +49,7 @@ tasks.register('corpusTest', JavaExec) {
 tasks.register('pyTest', Exec) {
     group = 'verification'
     description = 'Runs the Python analysis test suite.'
+    dependsOn tasks.named('classes'), tasks.named('testClasses')
     workingDir = projectDir
     commandLine 'python', 'scripts/run_python_tests.py'
 }
