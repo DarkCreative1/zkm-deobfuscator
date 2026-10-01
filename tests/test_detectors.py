@@ -22,11 +22,13 @@ public class SynthZkm {
 """
 
 def build():
-    import subprocess, pathlib, tempfile, os
+    import subprocess, pathlib, tempfile, os, shutil
     d = tempfile.mkdtemp()
     p = os.path.join(d, "SynthZkm.java")
     open(p, "w").write(SRC)
-    subprocess.check_call(["javac", "-d", d, p])
+    javac = shutil.which("javac")
+    assert javac, "javac bulunamadi; JDK kurulu olmali"
+    subprocess.check_call([javac, "-d", d, p])
     return open(os.path.join(d, "SynthZkm.class"), "rb").read()
 
 raw = build()

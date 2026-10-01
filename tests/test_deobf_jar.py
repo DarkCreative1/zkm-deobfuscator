@@ -1,4 +1,4 @@
-import sys, io, subprocess, zipfile
+import sys, io, subprocess, zipfile, shutil
 sys.path.insert(0, ".")
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 from zkm_deobfuscator.pipeline import deobfuscate_jar
@@ -8,14 +8,19 @@ EXPECTED_OUT = ("hello-ZKM-E2E-secret-sauce|magic=305419896|big=1234605616436508
                 "grade=B-good|ex=ok-100")
 EXPECTED_DEMO2 = "hello-ZKM-E2E-secret-sauce|B-good"
 
+JAVA = shutil.which("java")
+JAVAP = shutil.which("javap")
+assert JAVA, "java bulunamadi; JDK kurulu olmali"
+
 def run_jar(jar, main):
-    r = subprocess.run(["java", "-cp", jar, main], capture_output=True,
+    r = subprocess.run([JAVA, "-cp", jar, main], capture_output=True,
                        text=True, timeout=120)
     assert r.returncode == 0, r.stderr[-500:]
     return r.stdout.strip().replace("\r", "")
 
 def javap_strings(jar, cls):
-    r = subprocess.run(["javap", "-c", "-p", "-cp", jar, cls], capture_output=True,
+    assert JAVAP, "javap bulunamadi; JDK kurulu olmali"
+    r = subprocess.run([JAVAP, "-c", "-p", "-cp", jar, cls], capture_output=True,
                        text=True, timeout=120)
     assert r.returncode == 0
     return r.stdout

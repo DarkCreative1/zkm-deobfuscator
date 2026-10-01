@@ -15,9 +15,20 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORPUS = os.path.join(ROOT, "corpus")
-JAVA = os.environ.get("JAVA_HOME")
-JAVA_BIN = os.path.join(JAVA, "bin", "java.exe") if JAVA else "java"
-JAR = os.path.join(JAVA, "bin", "jar.exe") if JAVA else "jar"
+def _tool(name, fallback):
+    java = os.environ.get("JAVA_HOME")
+    if not java:
+        return fallback
+    exe = name + ".exe" if os.name == "nt" else ""
+    for sub in (os.path.join("bin", name + exe), os.path.join("bin", "java")):
+        p = os.path.join(java, *sub.split(os.sep))
+        if os.path.isfile(p):
+            return p
+    return fallback
+
+
+JAVA_BIN = _tool("java", "java")
+JAR = _tool("jar", "jar")
 
 CP = os.pathsep.join([
     os.path.join(ROOT, "build", "classes", "java", "main"),

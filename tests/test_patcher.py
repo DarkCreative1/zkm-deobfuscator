@@ -1,7 +1,10 @@
-import sys, io, subprocess
+import sys, io, subprocess, shutil
 sys.path.insert(0, ".")
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 import zipfile
+
+JAVA = shutil.which("java")
+assert JAVA, "java bulunamadi; JDK kurulu olmali"
 from zkm_deobfuscator.classfile import parse_class, disassemble
 from zkm_deobfuscator import rewrite as RW
 from zkm_deobfuscator import flow_simplifier as FL
@@ -53,7 +56,7 @@ kept = [(m.name, m.desc, m.exception_table) for m in cf2.methods if m.exception_
 assert len(kept) == 1 and kept[0][0] == "b", kept
 print("kalan gercek handler:", kept)
 
-r = subprocess.run(["java", "-cp", "build/test-tmp/demo3E-patched.jar", "a.a.a"],
+r = subprocess.run([JAVA, "-cp", "build/test-tmp/demo3E-patched.jar", "a.a.a"],
                    capture_output=True, text=True)
 print("output:", r.stdout.strip().replace("\n", " | "))
 assert "hello-ZKM-E2E-secret-sauce" in r.stdout and "calc=1035" in r.stdout, r.stderr[-500:]

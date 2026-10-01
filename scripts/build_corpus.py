@@ -17,10 +17,18 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORPUS = os.path.join(ROOT, "corpus")
 
-JAVA = os.environ.get("JAVA_HOME")
-JAVAC = os.path.join(JAVA, "bin", "javac.exe") if JAVA else "javac"
-JAR = os.path.join(JAVA, "bin", "jar.exe") if JAVA else "jar"
-JAVA_BIN = os.path.join(JAVA, "bin", "java.exe") if JAVA else "java"
+def _tool(name, fallback):
+    java = os.environ.get("JAVA_HOME")
+    if not java:
+        return fallback
+    exe = name + ".exe" if os.name == "nt" else ""
+    p = os.path.join(java, "bin", name + exe)
+    return p if os.path.isfile(p) else fallback
+
+
+JAVAC = _tool("javac", "javac")
+JAR = _tool("jar", "jar")
+JAVA_BIN = _tool("java", "java")
 
 DEMOS = ["demo1", "demo2", "demo3"]
 
