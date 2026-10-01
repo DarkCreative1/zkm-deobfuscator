@@ -160,11 +160,48 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         System.out.println("des/long OK");
     }
 
+    public static void testCorpusBytecodeTarget() throws Exception {
+        int limit = 61;
+        int scanned = 0;
+        List<String> offenders = new ArrayList<>();
+        List<java.io.File> jars = new ArrayList<>();
+        for (String root : new String[]{"corpus"}) collectJars(new java.io.File(root), jars);
+        java.util.Collections.sort(jars);
+        for (java.io.File f : jars) {
+            try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(f)) {
+                for (Enumeration<? extends java.util.zip.ZipEntry> en = zf.entries();
+                     en.hasMoreElements(); ) {
+                    java.util.zip.ZipEntry e = en.nextElement();
+                    if (!e.getName().endsWith(".class")) continue;
+                    byte[] b = zf.getInputStream(e).readAllBytes();
+                    int major = ((b[6] & 0xFF) << 8) | (b[7] & 0xFF);
+                    scanned++;
+                    if (major > limit)
+                        offenders.add(f.getName() + "!" + e.getName() + "=" + major);
+                }
+            }
+        }
+        check(scanned > 40, "corpus class files scanned, got " + scanned);
+        check(offenders.isEmpty(), "bundled corpus must target Java " + limit + " or older: " + offenders);
+        System.out.println("corpus bytecode OK (" + scanned + " class in " + jars.size() + " jar, max <= " + limit + ")");
+    }
+
+    static void collectJars(java.io.File dir, List<java.io.File> out) {
+        java.io.File[] kids = dir.listFiles();
+        if (kids == null) return;
+        Arrays.sort(kids);
+        for (java.io.File f : kids) {
+            if (f.isDirectory()) collectJars(f, out);
+            else if (f.getName().endsWith(".jar")) out.add(f);
+        }
+    }
+
     public static void testRefInline() throws Exception {
         System.setProperty("zkmdeobf.rename", "false");
         try {
         Pipeline.Result r = Pipeline.deobfuscateJar("corpus/fixtures/demo3D-obf.jar");
-        check(r.stats().refInlined() == 4, "ref_inlined=" + r.stats().refInlined());
+        check(r.stats().refInlined() == 4,
+                "ref_inlined=" + r.stats().refInlined() + " skipped=" + r.stats().strSkipped());
         java.util.Map<String, byte[]> jar = new java.util.TreeMap<>(r.jar());
         ClassIO.writeJar("build/test-tmp/_jt3d.jar", jar);
 
@@ -2050,6 +2087,8 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         testDesAndLong();
         System.out.println("[step] testTables");
         testTables();
+        System.out.println("[step] testCorpusBytecodeTarget");
+        testCorpusBytecodeTarget();
         System.out.println("[step] testRefInline");
         testRefInline();
         System.out.println("[step] testRename");

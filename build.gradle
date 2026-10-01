@@ -54,24 +54,28 @@ tasks.register('pyTest', Exec) {
     commandLine 'python', 'scripts/run_python_tests.py'
 }
 
-tasks.register('deobfuscateAll', JavaExec) {
+def corpusSets = ['demo1-zkm27', 'demo2-zkm27', 'demo3-zkm27',
+                 'demo1-zkm13', 'demo2-zkm13', 'demo3-zkm13']
+
+corpusSets.each { s ->
+    tasks.register("deobfuscate${s.replace('-', '')}", JavaExec) {
+        group = 'build'
+        description = "Regenerates the deobfuscated jar for corpus set ${s}."
+        dependsOn tasks.named('classes')
+        mainClass = 'com.zkmdeobf.Main'
+        classpath = sourceSets.main.runtimeClasspath
+        def dir = file("corpus/jars/${s}")
+        def inJar = dir.toPath().resolve('obf.jar')
+        def outJar = dir.toPath().resolve('deobf.jar')
+        def mapFile = file("corpus/changelogs/${s}.txt")
+        args = [inJar.toString(), '-o', outJar.toString(), '--map', mapFile.toString()]
+    }
+}
+
+tasks.register('deobfuscateAll') {
     group = 'build'
     description = 'Regenerates every deobfuscated corpus jar from its obfuscated input.'
-    dependsOn tasks.named('classes')
-    mainClass = 'com.zkmdeobf.Main'
-    classpath = sourceSets.main.runtimeClasspath
-    doFirst {
-        args = []
-        def sets = ['demo1-zkm27', 'demo2-zkm27', 'demo3-zkm27',
-                    'demo1-zkm13', 'demo2-zkm13', 'demo3-zkm13']
-        sets.each { s ->
-            def dir = file("corpus/jars/$s")
-            if (!dir.exists()) return
-            args += [dir.toPath().resolve('obf.jar').toString(),
-                     '-o', dir.toPath().resolve('deobf.jar').toString(),
-                     '--map', file("corpus/changelogs/$s.txt").toString()]
-        }
-    }
+    dependsOn corpusSets.collect { "deobfuscate${it.replace('-', '')}" }
 }
 
 tasks.named('check') {

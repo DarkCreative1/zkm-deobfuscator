@@ -265,6 +265,7 @@ tests/                                     Python test modules
 scripts/build_corpus.py                    rebuild the corpus with a given ZKM
 scripts/verify_corpus.py                   independent 1:1 verification
 scripts/run_python_tests.py                Python suite entry point
+scripts/retarget_corpus.py                 lower bundled corpus bytecode to Java 17
 corpus/src/demo1|demo2|demo3/              corpus sources
 corpus/jars/<demo>-zkm<ver>/               original.jar, obf.jar, deobf.jar
 corpus/changelogs/                         ZKM changelog output
@@ -349,6 +350,10 @@ ZKM 13 never applies those transformations, so there is nothing to reverse.
 - Python 3.9 or newer, for the Python implementation and test suite
 - `pycryptodome`, optional; the tool falls back to a pure-Python DES
 
+Java 17 is the minimum. CI runs the whole suite on both JDK 17 and JDK 21, and
+the bundled corpus is compiled to Java 17 bytecode so it loads on the oldest
+supported runtime.
+
 ```bash
 pip install -r requirements.txt          # optional, for the Python side
 pip install .                            # or install the Python package
@@ -362,7 +367,7 @@ access.
 ```bash
 git clone https://github.com/DarkCreative1/zkm-deobfuscator.git
 cd zkm-deobfuscator
-./gradlew build -x test
+./gradlew build
 ```
 
 ---

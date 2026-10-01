@@ -12,17 +12,21 @@ permissions:
 
 jobs:
   build:
-    name: Build and verify
+    name: Build and verify (JDK ${{ matrix.java }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.java }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,9 +43,7 @@ jobs:
           restore-keys: gradle-${{ runner.os }}-
 
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+        run: python -m pip install --upgrade pip -r requirements.txt
 
       - name: Compile
         run: ./gradlew compileJava compileTestJava --no-daemon
@@ -68,16 +70,30 @@ jobs:
           tail -10 /tmp/py-tests.log
 
       - name: Independent corpus verification
-        run: python scripts/verify_corpus.py
+        run: |
+          set +e
+          python scripts/verify_corpus.py > /tmp/verify.log 2>&1
+          rc=$?
+          tail -12 /tmp/verify.log
+          if [ "$rc" -ne 0 ]; then
+            echo ""
+            echo "FAILURE-DETAIL:"
+            tail -c 1200 /tmp/verify.log | tr '\n' '~' | sed 's/~/ | /g'
+            echo ""
+          fi
+          exit $rc
 
-      - name: Report
+      - name: Corpus inventory
         if: always()
         run: |
           {
-            echo "### corpus"
-            ls -l corpus/jars/*/*.jar | awk '{print $5, $9}'
-            echo "### build dir"
-            ls -l build 2>/dev/null || echo "(no build dir)"
+            echo "### bundled corpus"
+            echo "| set | classes |"
+            echo "| --- | --- |"
+            for j in corpus/jars/*/obf.jar; do
+              n=$(unzip -l "$j" | grep -c '\.class$')
+              echo "| $(dirname "$j" | xargs basename) | $n |"
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
   third-party-jars:
@@ -112,11 +128,20 @@ jobs:
                > /tmp/deob.log 2>&1
           rc=$?
           if [ "$rc" -ne 0 ]; then
-            echo "::group::deob.log"
+            echo "===== deob.log ====="
             cat /tmp/deob.log
-            echo "::endgroup::"
-            tail -c 900 /tmp/deob.log | tr '\n' '~' | sed 's/~/ | /g'
-            echo ""
             exit "$rc"
           fi
-          tail -3 /tmp/deob.log
+          cat /tmp/deob.log
+
+      - name: Assert the output is valid
+        run: |
+          grep -q '^verify: OK' /tmp/deob.log \
+            || { echo "expected 'verify: OK' in the deobfuscator output"; exit 1; }
+          test -s /tmp/thirdparty/out.jar \
+            || { echo "output jar is missing or empty"; exit 1; }
+          before=$(unzip -l /tmp/thirdparty/commons-io.jar | grep -c '\.class$')
+          after=$(unzip -l /tmp/thirdparty/out.jar | grep -c '\.class$')
+          echo "classes: $before in, $after out"
+          test "$before" = "$after" \
+            || { echo "class count changed: $before -> $after"; exit 1; }
