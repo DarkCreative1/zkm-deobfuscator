@@ -1,0 +1,4 @@
+open "demo3.jar";
+obfuscateReferencesInclude com.demo.*.*;
+obfuscate changeLogFileOut="cC.txt" obfuscateFlow=none encryptStringLiterals=none encryptIntegerConstants=none encryptLongConstants=none exceptionObfuscation=none obfuscateReferences=normal obfuscateReferenceStructures=inSpecialClass obfuscateReferencesPackage="com.demo.ref" obfuscateParameters=normal;
+saveAll archiveCompression=all "demo3C-obf.jar";

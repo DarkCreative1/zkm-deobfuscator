@@ -1,0 +1,4 @@
+open "demo3.jar";
+obfuscateReferencesInclude com.demo.Worker greet(java.lang.String) and com.demo.Worker grade(int) and com.demo.Worker run(java.lang.String) and com.demo.Worker calc(int, int);
+obfuscate changeLogFileOut="cD.txt" obfuscateFlow=none encryptStringLiterals=none encryptIntegerConstants=none encryptLongConstants=none exceptionObfuscation=none obfuscateReferences=normal obfuscateReferenceStructures=inSpecialClass obfuscateReferencesPackage="com.demo.ref";
+saveAll archiveCompression=all "demo3D-obf.jar";

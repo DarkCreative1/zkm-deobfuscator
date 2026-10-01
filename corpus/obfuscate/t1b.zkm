@@ -1,0 +1,8 @@
+open "corpus/jars/demo1-zkm27/original.jar";
+obfuscate changeLogFileOut="corpus/changelogs/demo1-zkm27.txt"
+          obfuscateFlow=normal
+          encryptStringLiterals=flowObfuscate
+          encryptIntegerConstants=aggressive
+          encryptLongConstants=normal
+          exceptionObfuscation=light;
+saveAll archiveCompression=all "corpus/jars/demo1-zkm27/obf.jar";

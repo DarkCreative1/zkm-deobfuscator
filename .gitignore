@@ -1,0 +1,43 @@
+# Build output
+build/
+out/
+target/
+.gradle/
+
+# Gradle
+!gradle/wrapper/gradle-wrapper.jar
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ZKM runtime noise
+ZKM_log.txt
+ZKM_LoadLog.txt
+ZKM_WarningLog.txt
+ZKM_O.ser
+
+# Scratch
+*.BACKUP
+*.log
+_scratch/
+tmp/

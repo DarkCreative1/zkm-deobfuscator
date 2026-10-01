@@ -1,0 +1,4 @@
+open "demo3.jar";
+obfuscateFlowExclude com.demo.Worker grade(int) and com.demo.Worker withException(int) and com.demo.Worker greet(java.lang.String);
+obfuscate changeLogFileOut="cG.txt" obfuscateFlow=none encryptStringLiterals=enhanced encryptIntegerConstants=none encryptLongConstants=none exceptionObfuscation=none methodParameterChanges=flowObfuscate;
+saveAll archiveCompression=all "demo3G-obf.jar";

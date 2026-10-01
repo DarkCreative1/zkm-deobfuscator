@@ -1,0 +1,14 @@
+open "corpus/jars/demo3-zkm27/original.jar";
+
+obfuscate changeLogFileOut="corpus/changelogs/demo3-zkm27.txt"
+          obfuscateFlow=aggressive
+          encryptStringLiterals=enhanced
+          encryptIntegerConstants=aggressive
+          encryptLongConstants=normal
+          exceptionObfuscation=heavy
+          obfuscateReferences=normal
+          obfuscateReferenceStructures=inSpecialClass
+          obfuscateReferencesPackage="com.demo3.ref"
+          obfuscateParameters=normal;
+
+saveAll archiveCompression=all "corpus/jars/demo3-zkm27/obf.jar";

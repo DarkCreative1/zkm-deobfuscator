@@ -1,0 +1,8 @@
+open "demo.jar";
+obfuscate changeLogFileOut="changelog.txt"
+          obfuscateFlow=normal
+          encryptStringLiterals=flowObfuscate
+          encryptIntegerConstants=aggressive
+          encryptLongConstants=normal
+          exceptionObfuscation=light;
+saveAll archiveCompression=all "demo-obf.jar";

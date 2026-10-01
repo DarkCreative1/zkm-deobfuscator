@@ -1,0 +1,3 @@
+open "demo3.jar";
+obfuscate changeLogFileOut="cB.txt" obfuscateFlow=none encryptStringLiterals=enhanced encryptIntegerConstants=none encryptLongConstants=none exceptionObfuscation=none;
+saveAll archiveCompression=all "demo3B-obf.jar";

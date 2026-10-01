@@ -1,0 +1,79 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'io.github.DarkCreative1'
+version = '1.0.0'
+description = 'Static deobfuscator for Zelix KlassMaster protected jars'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation files('lib/asm-9.8.jar', 'lib/asm-tree-9.8.jar', 'lib/asm-commons-9.8.jar')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    failOnError = false
+}
+
+application {
+    mainClass = 'com.zkmdeobf.Main'
+}
+
+tasks.named('test') {
+    enabled = false
+}
+
+tasks.register('corpusTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs the Java assertion suite (AllTests) over the bundled corpus.'
+    dependsOn tasks.named('compileTestJava')
+    mainClass = 'com.zkmdeobf.AllTests'
+    classpath = sourceSets.test.runtimeClasspath
+}
+
+tasks.register('pyTest', Exec) {
+    group = 'verification'
+    description = 'Runs the Python analysis test suite.'
+    workingDir = projectDir
+    commandLine 'python', 'scripts/run_python_tests.py'
+}
+
+tasks.register('deobfuscateAll', JavaExec) {
+    group = 'build'
+    description = 'Regenerates every deobfuscated corpus jar from its obfuscated input.'
+    dependsOn tasks.named('classes')
+    mainClass = 'com.zkmdeobf.Main'
+    classpath = sourceSets.main.runtimeClasspath
+    doFirst {
+        args = []
+        def sets = ['demo1-zkm27', 'demo2-zkm27', 'demo3-zkm27',
+                    'demo1-zkm13', 'demo2-zkm13', 'demo3-zkm13']
+        sets.each { s ->
+            def dir = file("corpus/jars/$s")
+            if (!dir.exists()) return
+            args += [dir.toPath().resolve('obf.jar').toString(),
+                     '-o', dir.toPath().resolve('deobf.jar').toString(),
+                     '--map', file("corpus/changelogs/$s.txt").toString()]
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'corpusTest'
+    dependsOn 'pyTest'
+}

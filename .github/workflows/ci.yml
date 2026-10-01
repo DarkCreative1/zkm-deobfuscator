@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Build
+        run: ./gradlew build --no-daemon
+
+      - name: Verify corpus
+        run: python scripts/verify_corpus.py
+
+  third-party-jars:
+    name: Real-world jar smoke test
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download a third-party jar
+        run: |
+          mkdir -p /tmp/thirdparty
+          curl -fsSL -o /tmp/thirdparty/commons-io.jar \
+            https://repo1.maven.org/maven2/commons-io/commons-io/2.15.1/commons-io-2.15.1.jar
+
+      - name: Deobfuscate
+        run: |
+          java -cp "build/classes/java/main:lib/asm-9.8.jar:lib/asm-tree-9.8.jar:lib/asm-commons-9.8.jar" \
+               com.zkmdeobf.Main /tmp/thirdparty/commons-io.jar -o /tmp/thirdparty/out.jar

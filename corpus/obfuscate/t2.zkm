@@ -1,0 +1,13 @@
+open "corpus/jars/demo2-zkm27/original.jar";
+obfuscateReferencesInclude com.demo2.Worker greet(java.lang.String) and com.demo2.Worker grade(int) and com.demo2.Worker run(java.lang.String) and com.demo2.Worker calc(int, int) and com.demo2.Worker switchGrade(int) and com.demo2.Worker loopSum(int) and com.demo2.Worker mixLong(long);
+obfuscate changeLogFileOut="corpus/changelogs/demo2-zkm27.txt"
+          obfuscateFlow=aggressive
+          encryptStringLiterals=enhanced
+          encryptIntegerConstants=aggressive
+          encryptLongConstants=normal
+          exceptionObfuscation=heavy
+          obfuscateReferences=normal
+          obfuscateReferenceStructures=inSpecialClass
+          obfuscateReferencesPackage="com.demo2.ref"
+          obfuscateParameters=normal;
+saveAll archiveCompression=all "corpus/jars/demo2-zkm27/obf.jar";
