@@ -5,7 +5,15 @@ import java.util.Map;
 public final class Main {
     private Main() {}
 
-    private static final String VERSION = "1.0.0";
+    private static final String VERSION = version();
+
+    private static String version() {
+        String v = Main.class.getPackage().getImplementationVersion();
+        if (v != null && !v.isBlank()) return v;
+        v = Main.class.getPackage().getSpecificationVersion();
+        if (v != null && !v.isBlank()) return v;
+        return "dev";
+    }
 
     private static int badOption(String opt, String why) {
         System.out.println("error: " + opt + " " + why);

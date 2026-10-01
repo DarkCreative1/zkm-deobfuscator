@@ -57,6 +57,18 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building $tag (version $version)"
 
+      - name: Align the project version with the tag
+        run: |
+          set -euo pipefail
+          expected='${{ steps.version.outputs.version }}'
+          actual=$(./gradlew properties --no-daemon -q -Pversion="$expected" \
+                    | sed -n 's/^version: //p' | head -1)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::build.gradle reports version '$actual' but the tag is '$expected'"
+            exit 1
+          fi
+          echo "build.gradle version is $actual"
+
       - name: Build and verify
         run: |
           set -euo pipefail

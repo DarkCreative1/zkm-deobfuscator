@@ -201,8 +201,12 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         check(runCli().equals(noArgs), "bare call and --help agree");
         check(runCli("--help").contains("USAGE"), "--help shows usage");
         check(runCli("-h").contains("USAGE"), "-h shows usage");
-        check(runCli("--version").startsWith("zkm-deobfuscator "), "--version");
-        check(runCli("-V").startsWith("zkm-deobfuscator "), "-V");
+        String v = runCli("--version");
+        check(v.startsWith("zkm-deobfuscator "), "--version");
+        check(v.length() > "zkm-deobfuscator ".length(), "--version has a version");
+        check(noArgs.contains(v.substring("zkm-deobfuscator ".length())),
+                "help screen shows the same version as --version");
+        check(runCli("-V").equals(v), "-V matches --version");
 
         check(runCliCode() == 0, "bare call exits 0");
         check(runCliCode("--bogus") == 2, "unknown option exits 2");

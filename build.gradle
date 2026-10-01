@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.DarkCreative1'
-version = '1.0.0'
+version = providers.gradleProperty('version').getOrElse('1.0.0')
 description = 'Static deobfuscator for Zelix KlassMaster protected jars'
 
 java {
