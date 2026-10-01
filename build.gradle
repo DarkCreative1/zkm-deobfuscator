@@ -82,3 +82,44 @@ tasks.named('check') {
     dependsOn 'corpusTest'
     dependsOn 'pyTest'
 }
+
+def asmJars = configurations.runtimeClasspath
+
+tasks.register('fatJar', Jar) {
+    group = 'build'
+    description = 'Builds a single self-contained runnable jar with ASM bundled in.'
+    dependsOn tasks.named('classes')
+    archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes(
+            'Main-Class': 'com.zkmdeobf.Main',
+            'Implementation-Title': 'zkm-deobfuscator',
+            'Implementation-Version': project.version,
+            'Build-Jdk-Spec': '17'
+        )
+    }
+    from sourceSets.main.output
+    from({
+        asmJars.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/MANIFEST.MF'
+        exclude 'module-info.class', 'META-INF/versions/*/module-info.class'
+    }
+}
+
+tasks.register('smokeTestFatJar', JavaExec) {
+    group = 'verification'
+    description = 'Runs the bundled corpus through the fat jar to prove it is self-contained.'
+    dependsOn tasks.named('fatJar')
+    mainClass = 'com.zkmdeobf.Main'
+    classpath = files(tasks.named('fatJar').flatMap { it.archiveFile })
+    def f = tasks.named('fatJar').flatMap { it.archiveFile }
+    def tmp = layout.buildDirectory.file('fatjar-smoke')
+    outputs.dir(tmp)
+    doFirst {
+        def out = tmp.get().asFile
+        out.mkdirs()
+        args = ['corpus/fixtures/demo3D-obf.jar', '-o', new File(out, 'smoke.jar').path]
+    }
+}

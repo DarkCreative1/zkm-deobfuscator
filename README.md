@@ -27,7 +27,7 @@ Verified against two ZKM releases: **27.0.0** and **13.0.0**.
 - [Corpus](#corpus)
 - [Project layout](#project-layout)
 - [Requirements](#requirements)
-- [Clone](#clone)
+- [Releases](#releases)
 - [Limitations](#limitations)
 - [License](#license)
 
@@ -35,23 +35,34 @@ Verified against two ZKM releases: **27.0.0** and **13.0.0**.
 
 ## Quick start
 
+Download the runnable jar from the [releases page](https://github.com/DarkCreative1/zkm-deobfuscator/releases)
+and run it with nothing but a JRE 17 or newer. ASM is bundled, so there is no
+classpath to assemble.
+
 ```bash
-./gradlew build -x test
+java -jar zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar
 ```
 
-Run it:
+To restore the exact original member names, pass the changelog ZKM produced:
 
 ```bash
+java -jar zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar --map changelog.txt
+```
+
+Building from source instead:
+
+```bash
+./gradlew build
 ./gradlew run --args="corpus/jars/demo3-zkm27/obf.jar \
                            -o /tmp/out.jar \
                            --map corpus/changelogs/demo3-zkm27.txt"
 ```
 
-Or invoke the entry point directly:
+To produce the runnable jar yourself:
 
 ```bash
-java -cp "build/classes/java/main:lib/asm-9.8.jar:lib/asm-tree-9.8.jar:lib/asm-commons-9.8.jar" \
-     com.zkmdeobf.Main input.jar -o output.jar --map changelog.txt
+./gradlew fatJar
+java -jar build/libs/zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar
 ```
 
 ### CLI
@@ -362,13 +373,27 @@ pip install .                            # or install the Python package
 ASM is vendored under `lib/`, so building the Java side requires no network
 access.
 
-## Clone
+## Releases
+
+Prebuilt runnable jars are published on the
+[releases page](https://github.com/DarkCreative1/zkm-deobfuscator/releases).
+Each release contains one self-contained jar with ASM bundled in.
+
+| file | use |
+| --- | --- |
+| `zkm-deobfuscator-<version>-all.jar` | the only file you need; run it with `java -jar` |
+
+Releases are produced by a GitHub Actions workflow. Pushing a version tag runs
+the full test suite, builds the jar, proves it runs standalone on both JDK 17
+and JDK 21, and then prepares a draft release for you to review and publish.
 
 ```bash
-git clone https://github.com/DarkCreative1/zkm-deobfuscator.git
-cd zkm-deobfuscator
-./gradlew build
+git tag v1.0.0
+git push origin v1.0.0
 ```
+
+A release can also be started by hand from the Actions tab, which is useful for
+re-running a failed publish.
 
 ---
 
