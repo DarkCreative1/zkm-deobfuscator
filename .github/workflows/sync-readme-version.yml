@@ -40,10 +40,13 @@ jobs:
           from pathlib import Path
           import re, sys
           tag = sys.argv[1]
+          no_v = tag[1:] if tag.startswith('v') else tag
           p = Path('README.md')
           s = p.read_text(encoding='utf-8')
-          s2 = re.sub(r'^.*Current version:.*$', 'Current version: **' + tag + '**', s, count=1, flags=re.M)
-          p.write_text(s2, encoding='utf-8')
+          s = re.sub(r'^.*Current version:.*$', 'Current version: **' + tag + '**', s, count=1, flags=re.M)
+          s = s.replace('zkm-deobfuscator-<version>-all.jar', 'zkm-deobfuscator-' + no_v + '-all.jar')
+          s = re.sub(r'zkm-deobfuscator-[0-9]+\.[0-9]+\.[0-9]+-all\.jar', 'zkm-deobfuscator-' + no_v + '-all.jar', s)
+          p.write_text(s, encoding='utf-8')
           PY
           if git diff --quiet README.md; then
             echo "README already current"
