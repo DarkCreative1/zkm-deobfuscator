@@ -36,7 +36,15 @@ jobs:
             echo "Bad tag: $tag" >&2
             exit 1
           fi
-          sed -i "s/Current version: \*\*v[0-9][0-9.]*\*\*/Current version: **${tag}**/" README.md
+          python3 - "$tag" <<'PY'
+          from pathlib import Path
+          import re, sys
+          tag = sys.argv[1]
+          p = Path('README.md')
+          s = p.read_text(encoding='utf-8')
+          s2 = re.sub(r'^.*Current version:.*$', 'Current version: **' + tag + '**', s, count=1, flags=re.M)
+          p.write_text(s2, encoding='utf-8')
+          PY
           if git diff --quiet README.md; then
             echo "README already current"
             exit 0

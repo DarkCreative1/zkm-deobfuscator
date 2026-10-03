@@ -11,7 +11,7 @@ ZKM control-flow noise, and emits a verified runnable jar.
 
 Supported corpus builds: **ZKM 27.0.0** and **13.0.0**.
 
-**Current version:** v1.0.0
+Current version: **v1.0.0**
 
 ---
 
