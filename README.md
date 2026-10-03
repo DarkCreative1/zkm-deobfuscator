@@ -11,6 +11,8 @@ ZKM control-flow noise, and emits a verified runnable jar.
 
 Supported corpus builds: **ZKM 27.0.0** and **13.0.0**.
 
+**Current version:** v1.0.0
+
 ---
 
 ## Quick start
@@ -19,13 +21,13 @@ Download the self-contained jar from the
 [releases page](https://github.com/DarkCreative1/zkm-deobfuscator/releases):
 
 ```bash
-java -jar zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar
+java -jar zkm-deobfuscator-<version>-all.jar input.jar -o output.jar
 ```
 
 Restore exact original member names with the ZKM changelog:
 
 ```bash
-java -jar zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar --map changelog.txt
+java -jar zkm-deobfuscator-<version>-all.jar input.jar -o output.jar --map changelog.txt
 ```
 
 Build from source:
@@ -39,7 +41,7 @@ Create the runnable jar yourself:
 
 ```bash
 ./gradlew fatJar
-java -jar build/libs/zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar
+java -jar build/libs/zkm-deobfuscator-<version>-all.jar input.jar -o output.jar
 ```
 
 ---
@@ -47,9 +49,9 @@ java -jar build/libs/zkm-deobfuscator-1.0.0-all.jar input.jar -o output.jar
 ## CLI
 
 ```bash
-java -jar zkm-deobfuscator-1.0.0-all.jar
-java -jar zkm-deobfuscator-1.0.0-all.jar --help
-java -jar zkm-deobfuscator-1.0.0-all.jar --version
+java -jar zkm-deobfuscator-<version>-all.jar
+java -jar zkm-deobfuscator-<version>-all.jar --help
+java -jar zkm-deobfuscator-<version>-all.jar --version
 ```
 
 Main options:
@@ -216,7 +218,7 @@ Main Java modules:
 Release jars are built by the GitHub Actions release workflow. Push a tag:
 
 ```bash
-git tag v1.0.0
+git tag v1.0.0  # replace with the release tag
 git push origin v1.0.0
 ```
 
