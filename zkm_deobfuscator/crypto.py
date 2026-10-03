@@ -353,10 +353,14 @@ def java_modified_utf8_decode(b: bytes) -> str:
             out.append(chr(a))
             i += 1
         elif (a & 0xE0) == 0xC0:
+            if i + 1 >= n:
+                raise ValueError("truncated MUTF-8 2-byte seq")
             c = ((a & 0x1F) << 6) | (b[i + 1] & 0x3F)
             out.append(chr(c))
             i += 2
         else:
+            if i + 2 >= n:
+                raise ValueError("truncated MUTF-8 3-byte seq")
             c = ((a & 0x0F) << 12) | ((b[i + 1] & 0x3F) << 6) | (b[i + 2] & 0x3F)
             out.append(chr(c))
             i += 3
@@ -364,7 +368,7 @@ def java_modified_utf8_decode(b: bytes) -> str:
 
 def reference_pack_keys(keys6: list[int], be: int, idx: int) -> int:
 
-    packed = (idx << 46) | (be << 42)
+    packed = ((idx & 0xFFFFFFFF) << 46) | (be << 42)
     for j, k in enumerate(keys6):
         packed |= (k & 0x7F) << (7 * j)
     return packed
@@ -372,7 +376,7 @@ def reference_pack_keys(keys6: list[int], be: int, idx: int) -> int:
 def reference_unpack_keys(packed: int, idx: int, offset_table: list[int]) -> tuple[list[int], int]:
     be = (packed >> 42) & 0xF
     bf = ((idx & 3) << 4) | be
-    off = offset_table[bf & len(offset_table) % 256] if offset_table else 0
+    off = offset_table[bf % len(offset_table)] if offset_table else 0
     keys = [((packed >> (7 * j)) & 0x7F) - off for j in range(6)]
     keys = [(k + 128) % 128 for k in keys]
     return keys, bf

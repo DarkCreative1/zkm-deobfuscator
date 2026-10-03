@@ -39,6 +39,12 @@ public final class Main {
             + "      --run <main>      Run a class from the produced jar after writing" + nl
             + "                        it, and report whether it exited cleanly." + nl
             + "                        Requires --output." + nl
+            + "      --no-dyn          Do not execute code from the input jar while" + nl
+            + "                        analysing it (disables dynamic value" + nl
+            + "                        recovery; purely static). Use for untrusted" + nl
+            + "                        jars: dynamic recovery loads obfuscated" + nl
+            + "                        classes and invokes their methods, which" + nl
+            + "                        runs third-party code on your machine." + nl
             + "  -h, --help            Show this help and exit." + nl
             + "  -V, --version         Show the version and exit." + nl
             + nl
@@ -116,6 +122,8 @@ public final class Main {
             } else if (a.equals("--map")) {
                 if (!hasValue) { System.exit(badOption(a, "needs a file path")); return; }
                 System.setProperty("zkmdeobf.changelog", args[++i]);
+            } else if (a.equals("--no-dyn")) {
+                System.setProperty("zkmdeobf.dyn", "false");
             } else if (a.equals("--run")) {
                 if (!hasValue) { System.exit(badOption(a, "needs a main class name")); return; }
                 runMain = args[++i];
@@ -179,12 +187,23 @@ public final class Main {
                 String javaBin = System.getProperty("java.home") + "/bin/java";
                 Process p = new ProcessBuilder(javaBin, "-cp", output, runMain)
                         .redirectErrorStream(true).start();
+                // Drain stdout on a side thread BEFORE waiting: otherwise a
+                // chatty child (>pipe buffer) blocks forever while we block in
+                // waitFor -- a classic subprocess deadlock.
+                java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+                Thread drain = new Thread(() -> {
+                    try { p.getInputStream().transferTo(buf); }
+                    catch (Exception ignored) { }
+                });
+                drain.setDaemon(true);
+                drain.start();
                 boolean bitti = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
                 if (!bitti) {
                     p.destroyForcibly();
                     System.out.println("run FAILED: timeout (120s)");
                 } else {
-                    String out = new String(p.getInputStream().readAllBytes());
+                    drain.join(5000);
+                    String out = buf.toString(java.nio.charset.StandardCharsets.UTF_8);
                     boolean ok = p.exitValue() == 0;
                     String head = out.replace("\r", "").strip();
                     if (head.length() > 300) head = head.substring(0, 300) + "...";

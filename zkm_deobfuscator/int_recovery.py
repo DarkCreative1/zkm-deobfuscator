@@ -89,6 +89,10 @@ def _const_long(op: int, opr: bytes, cf: ClassFile) -> int | None:
 
 def recover_int_xor(arg: int, key: int, mask: int, index_xor: int,
                     enc_longs: list[int]) -> int:
-
-    idx = (arg ^ (key & mask) ^ index_xor) & M32
+    # Java 32-bit semantics: mask the key to 32 bits before AND, like (key & mask).
+    key32 = key & 0xFFFFFFFF
+    mask32 = mask & 0xFFFFFFFFFFFFFFFF
+    idx = (arg ^ (key32 & mask32) ^ index_xor) & M32
+    if idx < 0 or idx >= len(enc_longs):
+        raise IndexError(f"idx out of range: {idx}")
     return _i32(enc_longs[idx] ^ key)

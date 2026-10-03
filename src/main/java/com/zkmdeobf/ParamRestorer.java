@@ -68,6 +68,9 @@ public final class ParamRestorer {
 
     public static Plan analyze(ClassNode cn, MethodNode m) {
         if (!m.desc.startsWith("([Ljava/lang/Object;)")) return null;
+        // Native methods have no code; changing their descriptor breaks JNI
+        // linkage. Abstract ones are fine (no code to rewrite).
+        if ((m.access & Opcodes.ACC_NATIVE) != 0) return null;
         boolean statik = (m.access & Opcodes.ACC_STATIC) != 0;
         int arrLocal = statik ? 0 : 1;
 
@@ -225,6 +228,12 @@ public final class ParamRestorer {
         int w = 0;
         for (int i = 0; i < slots.length; i++) { slots[i] = base + w; w += p.order().get(i).type().getSize(); }
 
+        // Atomicity: validate all fresh-param loads before mutating anything.
+        for (int i = 0; i < p.order().size(); i++) {
+            if (p.order().get(i).local() >= 0) continue;
+            if (loadFor(p.order().get(i).type(), slots[i]) == null) return false;
+        }
+
         for (int i = 0; i < p.order().size(); i++) {
             int local = p.order().get(i).local();
             if (local < 0) continue;
@@ -253,6 +262,21 @@ public final class ParamRestorer {
             int local = p.order().get(i).local();
             if (local >= 0) remap.put(local, slots[i]);
         }
+        // Temporaries that must keep their old slots may not alias the new
+        // parameter block. When that happens the unpack result is consumed
+        // inside the same slot range as the temp, making the callee impossible
+        // to rewrite soundly without a live-range split we do not do: refuse.
+        // (Widening to long/double is what creates the overlap: the packed
+        // Object slot and the temp share slots after unboxedType kicks in.)
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            int v = -1;
+            if (n instanceof VarInsnNode) v = ((VarInsnNode) n).var;
+            else if (n instanceof IincInsnNode) v = ((IincInsnNode) n).var;
+            else continue;
+            if (unpackNodes.contains(n)) continue;
+            if (remap.containsKey(v)) continue;
+            if (v >= base && v < base + w) return false;
+        }
         for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
             if (unpackNodes.contains(n)) continue;
             int op = n.getOpcode();
@@ -263,6 +287,11 @@ public final class ParamRestorer {
                         || op == Opcodes.DSTORE) && remap.containsKey(v.var)) v.var = remap.get(v.var);
             } else if (n instanceof IincInsnNode ii && remap.containsKey(ii.var)) {
                 ii.var = remap.get(ii.var);
+            }
+        }
+        if (m.localVariables != null) {
+            for (LocalVariableNode lv : m.localVariables) {
+                if (remap.containsKey(lv.index)) lv.index = remap.get(lv.index);
             }
         }
 
@@ -310,6 +339,91 @@ public final class ParamRestorer {
             cn = cn.superName == null ? null : classes.get(cn.superName + ".class");
         }
         return null;
+    }
+
+    // Drop plans that would break the class hierarchy:
+    // (a) unpacking must not collide with an existing sibling method that
+    // already has the target name+desc (duplicate member -> VerifyError);
+    // (b) every in-jar override of the same packed method must unpack to the
+    // SAME new descriptor, otherwise callers and callees diverge.
+    static void retainConsistent(Map<String, ClassNode> classes,
+                                 Map<Plan, ClassNode> plans, Map<String, String> newDescs) {
+        Map<String, Set<String>> byOld = new HashMap<>();
+        for (Plan p : plans.keySet())
+            byOld.computeIfAbsent(p.callee().name + p.callee().desc, x -> new HashSet<>())
+                 .add(p.newDesc());
+        Set<Plan> drop = new HashSet<>();
+        for (Map.Entry<Plan, ClassNode> e : plans.entrySet()) {
+            Plan p = e.getKey();
+            ClassNode cn = e.getValue();
+            Set<String> alts = byOld.get(p.callee().name + p.callee().desc);
+            if (alts != null && alts.size() > 1) {
+                // Same packed shape unpacks differently somewhere: check whether
+                // they are actually related by inheritance before dropping.
+                if (hierarchyShares(classes, cn, p.callee())) drop.add(p);
+            }
+            for (MethodNode m : cn.methods) {
+                if (m == p.callee()) continue;
+                if (m.name.equals(p.callee().name) && m.desc.equals(p.newDesc())) {
+                    drop.add(p);
+                    break;
+                }
+            }
+        }
+        for (Plan p : drop) {
+            plans.remove(p);
+            newDescs.values().removeIf(v -> v.equals(p.newDesc()));
+        }
+        // Rebuild newDescs cleanly from the surviving plans (the removeIf above
+        // could over-remove when two plans share a newDesc string).
+        newDescs.clear();
+        for (Map.Entry<Plan, ClassNode> e : plans.entrySet())
+            newDescs.put(e.getValue().name + "." + e.getKey().callee().name
+                    + e.getKey().callee().desc, e.getKey().newDesc());
+    }
+
+    private static boolean hierarchyShares(Map<String, ClassNode> classes,
+                                            ClassNode cn, MethodNode m) {
+        Set<String> seen = new HashSet<>();
+        Deque<String> q = new ArrayDeque<>();
+        if (cn.superName != null) q.add(cn.superName);
+        if (cn.interfaces != null) q.addAll(cn.interfaces);
+        // Walk up: any supertype with the same packed method means the unpack
+        // must agree hierarchy-wide.
+        while (!q.isEmpty()) {
+            String cur = q.poll();
+            if (!seen.add(cur)) continue;
+            ClassNode scn = classes.get(cur + ".class");
+            if (scn == null) continue;
+            for (MethodNode sm : scn.methods)
+                if (sm.name.equals(m.name) && sm.desc.equals(m.desc)) return true;
+            if (scn.superName != null) q.add(scn.superName);
+            if (scn.interfaces != null) q.addAll(scn.interfaces);
+        }
+        // Walk down: any subtype with the same packed method.
+        for (ClassNode o : classes.values()) {
+            if (o == cn) continue;
+            for (MethodNode om : o.methods) {
+                if (!om.name.equals(m.name) || !om.desc.equals(m.desc)) continue;
+                String decl = declaringOwner(classes, o.name, om.name, om.desc);
+                if (decl != null && (decl.equals(cn.name) || isSubOf(classes, cn.name, decl)
+                        || isSubOf(classes, decl, cn.name)))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isSubOf(Map<String, ClassNode> classes, String sub, String sup) {
+        Set<String> seen = new HashSet<>();
+        String cur = sub;
+        while (cur != null && seen.add(cur)) {
+            if (cur.equals(sup)) return true;
+            ClassNode cn = classes.get(cur + ".class");
+            if (cn == null) return false;
+            cur = cn.superName;
+        }
+        return false;
     }
 
     public static int rewriteCallers(Map<String, ClassNode> classes, Map<String, String> newDescs) {
@@ -362,6 +476,7 @@ public final class ParamRestorer {
                         if (hasStore) continue;
                         AbstractInsnNode from0 = ins.get(sj);
                         if (!rangeClean(m, from0, cur)) continue;
+                        if (!callerRangeOk(from0, cur)) continue;
                         mi.desc = nd;
                         AbstractInsnNode x = from0;
                         while (true) {
@@ -407,6 +522,7 @@ public final class ParamRestorer {
                             && arrSize >= 0) from = ins.get(arrNew - 1);
 
                     if (!rangeClean(m, from, cur)) continue;
+                    if (!callerRangeOk(from, cur)) continue;
                     mi.desc = nd;
                     AbstractInsnNode x = from;
                     while (true) {
@@ -425,8 +541,61 @@ public final class ParamRestorer {
         return n;
     }
 
-    private static boolean rangeClean(MethodNode m, AbstractInsnNode from, AbstractInsnNode to) {
-        Set<LabelNode> bounds = new HashSet<>();
+    // ZKM callers pre-push the actual arguments BELOW the array construction
+    // and pull them in with DUP/SWAP+AASTORE. The [from..call) range must then
+    // contain only array plumbing (size, ANEWARRAY, DUP/SWAP, indices,
+    // AASTORE, boxing calls). Anything else -- a fresh ALOAD/LDC-string, a
+    // field read, another call -- means the arguments live INSIDE the range
+    // (standard javac new-Object[] pattern) and deleting it would drop them.
+    private static boolean callerRangeOk(AbstractInsnNode from, AbstractInsnNode to) {
+        for (AbstractInsnNode x = from; x != null && x != to; x = x.getNext()) {
+            if (x instanceof LabelNode || x instanceof LineNumberNode || x instanceof FrameNode) continue;
+            int op = x.getOpcode();
+            if (x instanceof LdcInsnNode l) {
+                if (!(l.cst instanceof Integer)) return false;
+                continue;
+            }
+            if (x instanceof IntInsnNode) {
+                if (op != Opcodes.BIPUSH && op != Opcodes.SIPUSH) return false;
+                continue;
+            }
+            if (x instanceof VarInsnNode || x instanceof IincInsnNode) return false;
+            if (x instanceof FieldInsnNode) return false;
+            if (x instanceof MethodInsnNode mi) {
+                if (!isBoxingCall(mi)) return false;
+                continue;
+            }
+            if (x instanceof InvokeDynamicInsnNode || x instanceof MultiANewArrayInsnNode
+                    || x instanceof JumpInsnNode || x instanceof TableSwitchInsnNode
+                    || x instanceof LookupSwitchInsnNode)
+                return false;
+            if (x instanceof TypeInsnNode t) {
+                if (op == Opcodes.ANEWARRAY && t.desc.equals("java/lang/Object")) continue;
+                if (op == Opcodes.CHECKCAST) continue;
+                return false;
+            }
+            switch (op) {
+                case Opcodes.NOP, Opcodes.POP, Opcodes.POP2, Opcodes.DUP, Opcodes.DUP_X1,
+                     Opcodes.DUP_X2, Opcodes.DUP2, Opcodes.DUP2_X1, Opcodes.DUP2_X2,
+                     Opcodes.SWAP, Opcodes.AASTORE,
+                     Opcodes.ICONST_M1, Opcodes.ICONST_0, Opcodes.ICONST_1,
+                     Opcodes.ICONST_2, Opcodes.ICONST_3, Opcodes.ICONST_4, Opcodes.ICONST_5 -> { }
+                default -> { return false; }
+            }
+        }
+        return true;
+    }
+
+    private static boolean isBoxingCall(MethodInsnNode mi) {
+        if (!mi.name.equals("valueOf")) return false;
+        String o = mi.owner;
+        return o.equals("java/lang/Integer") || o.equals("java/lang/Long")
+                || o.equals("java/lang/Float") || o.equals("java/lang/Double")
+                || o.equals("java/lang/Character") || o.equals("java/lang/Boolean")
+                || o.equals("java/lang/Byte") || o.equals("java/lang/Short");
+    }
+
+    private static boolean rangeClean(MethodNode m, AbstractInsnNode from, AbstractInsnNode to) {        Set<LabelNode> bounds = new HashSet<>();
         if (m.tryCatchBlocks != null) for (TryCatchBlockNode t : m.tryCatchBlocks) {
             bounds.add(t.start); bounds.add(t.end); bounds.add(t.handler);
         }

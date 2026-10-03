@@ -50,7 +50,9 @@ def recover_int(enc_long: int, per_value_key: int, outer_key: int,
 
     tmp = C.des_long_crypt(enc_long, outer_key, True) if outer_is_des else (enc_long ^ outer_key)
     rnd = C.des_long_crypt(tmp, per_value_key, True) if inner_is_des else (tmp ^ per_value_key)
-    return rnd & 0xFFFFFFFF
+    rnd &= 0xFFFFFFFFFFFFFFFF
+    # Java int semantics: pack signed so struct.pack(">i") never fails.
+    return rnd - 2**32 if rnd >= 2**31 else rnd
 
 def recover_long(enc_long: int, per_value_key: int, outer_key: int,
                  outer_is_des: bool, inner_is_des: bool) -> int:

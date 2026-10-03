@@ -64,6 +64,14 @@ public final class Rewriter {
             if (ClassIO.jumpTargets(m).contains(n)) return false;
             n = n.getNext();
         }
+        // The whole [from..invoke] range is deleted and replaced by one LDC.
+        // Anything with an observable effect in between (a call, allocation,
+        // field/array write, monitor, branch, throw/return) must veto the
+        // patch; otherwise we would silently drop real program behaviour.
+        // (The trailing invoke itself is the decrypt call being replaced.)
+        for (AbstractInsnNode x = from; x != null && x != invoke; x = x.getNext()) {
+            if (!patchSafeNode(x)) return false;
+        }
 
         LdcInsnNode ldc = new LdcInsnNode(constant);
         m.instructions.insertBefore(from, ldc);
@@ -75,6 +83,60 @@ public final class Rewriter {
             n = nx;
         }
         return true;
+    }
+
+    private static boolean patchSafeNode(AbstractInsnNode x) {
+        if (x instanceof LabelNode || x instanceof LineNumberNode || x instanceof FrameNode) return true;
+        if (x instanceof LdcInsnNode || x instanceof IntInsnNode) return true;
+        if (x instanceof VarInsnNode v) {
+            int op = x.getOpcode();
+            return op == Opcodes.ILOAD || op == Opcodes.LLOAD || op == Opcodes.FLOAD
+                    || op == Opcodes.DLOAD || op == Opcodes.ALOAD;
+        }
+        if (x instanceof InsnNode) {
+            int op = x.getOpcode();
+            if (op >= Opcodes.ICONST_M1 && op <= Opcodes.ICONST_5) return true;
+            if (op == Opcodes.LCONST_0 || op == Opcodes.LCONST_1
+                    || op == Opcodes.FCONST_0 || op == Opcodes.FCONST_1 || op == Opcodes.FCONST_2
+                    || op == Opcodes.DCONST_0 || op == Opcodes.DCONST_1
+                    || op == Opcodes.ACONST_NULL) return true;
+            // Pure stack shuffling / arithmetic between the pushes is harmless:
+            // it only combines the constant inputs of the decrypt call.
+            switch (op) {
+                case Opcodes.NOP, Opcodes.POP, Opcodes.POP2, Opcodes.DUP, Opcodes.DUP_X1,
+                     Opcodes.DUP_X2, Opcodes.DUP2, Opcodes.DUP2_X1, Opcodes.DUP2_X2, Opcodes.SWAP,
+                     Opcodes.IADD, Opcodes.ISUB, Opcodes.IMUL, Opcodes.IDIV, Opcodes.IREM,
+                     Opcodes.IAND, Opcodes.IOR, Opcodes.IXOR, Opcodes.ISHL, Opcodes.ISHR,
+                     Opcodes.IUSHR, Opcodes.INEG, Opcodes.I2B, Opcodes.I2C, Opcodes.I2S,
+                     Opcodes.LADD, Opcodes.LSUB, Opcodes.LMUL, Opcodes.LDIV, Opcodes.LREM,
+                     Opcodes.LAND, Opcodes.LOR, Opcodes.LXOR, Opcodes.LSHL, Opcodes.LSHR,
+                     Opcodes.LUSHR, Opcodes.LNEG, Opcodes.LCMP,
+                     Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV, Opcodes.FREM,
+                     Opcodes.FNEG, Opcodes.FCMPL, Opcodes.FCMPG,
+                     Opcodes.DADD, Opcodes.DSUB, Opcodes.DMUL, Opcodes.DDIV, Opcodes.DREM,
+                     Opcodes.DNEG, Opcodes.DCMPL, Opcodes.DCMPG,
+                     Opcodes.I2L, Opcodes.I2F, Opcodes.I2D, Opcodes.L2I, Opcodes.L2F,
+                     Opcodes.L2D, Opcodes.F2I, Opcodes.F2L, Opcodes.D2I, Opcodes.D2L -> { return true; }
+                default -> { return false; }
+            }
+        }
+        // Field reads of the decrypt table itself appear inside some ranges
+        // (GETSTATIC [String / longs + AALOAD/LALOAD); those are the pattern.
+        // Anything else (calls, jumps, news, writes) vetoes.
+        if (x instanceof FieldInsnNode f) return x.getOpcode() == Opcodes.GETSTATIC;
+        if (x instanceof JumpInsnNode || x instanceof TableSwitchInsnNode
+                || x instanceof LookupSwitchInsnNode || x instanceof IincInsnNode)
+            return false;
+        if (x instanceof TypeInsnNode) {
+            // CHECKCAST/INSTANCEOF only trigger class loading, no init or mutation.
+            int op = x.getOpcode();
+            return op == Opcodes.CHECKCAST || op == Opcodes.INSTANCEOF;
+        }
+        if (x instanceof MethodInsnNode || x instanceof InvokeDynamicInsnNode
+                || x instanceof MultiANewArrayInsnNode)
+            return false;
+        int op = x.getOpcode();
+        return op < 0;
     }
 
     public static boolean patchCallSiteKeepMiddle(MethodNode m, AbstractInsnNode argPush,
@@ -93,6 +155,12 @@ public final class Rewriter {
         for (AbstractInsnNode x = argPush; x != null && x != invoke.getNext(); x = x.getNext()) {
             if (x instanceof LabelNode && (bounds.contains(x) || tgts.contains(x))) return false;
         }
+        // The middle between argPush and keyPush is KEPT, but the value
+        // underneath it changes (lookup input -> lookup result). The middle
+        // must therefore be self-contained: net stack delta 0 and no
+        // DUP/SWAP that could reach below and observe the swapped value.
+        // Anything unanalysable vetoes the patch.
+        if (!middleSelfContained(argPush, keyPush)) return false;
         m.instructions.insertBefore(argPush, new LdcInsnNode(constant));
         m.instructions.remove(argPush);
         m.instructions.remove(keyPush);
@@ -100,9 +168,25 @@ public final class Rewriter {
         return true;
     }
 
+    private static boolean middleSelfContained(AbstractInsnNode argPush, AbstractInsnNode keyPush) {
+        int depth = 0;
+        for (AbstractInsnNode x = argPush.getNext(); x != null && x != keyPush; x = x.getNext()) {
+            if (x instanceof LabelNode || x instanceof LineNumberNode || x instanceof FrameNode) continue;
+            int op = x.getOpcode();
+            if (op == Opcodes.DUP || op == Opcodes.DUP_X1 || op == Opcodes.DUP_X2
+                    || op == Opcodes.DUP2 || op == Opcodes.DUP2_X1 || op == Opcodes.DUP2_X2
+                    || op == Opcodes.SWAP)
+                return false;
+            int[] s = stackSizes(x);
+            if (s == null) return false;
+            depth += s[1] - s[0];
+            if (depth < 0) return false;
+        }
+        return depth == 0;
+    }
+
     public static int stripFakeHandlers(ClassNode cn, MethodNode m) {
         if (m.tryCatchBlocks == null || m.tryCatchBlocks.isEmpty()) return 0;
-        Set<LabelNode> targets = ClassIO.jumpTargets(m);
         List<TryCatchBlockNode> dead = new ArrayList<>();
         Map<LabelNode, AbstractInsnNode> athrowAt = new HashMap<>();
         for (TryCatchBlockNode t : m.tryCatchBlocks) {
@@ -118,6 +202,12 @@ public final class Rewriter {
             }
         }
         for (TryCatchBlockNode t : dead) m.tryCatchBlocks.remove(t);
+
+        // Recompute reachability AFTER removing the dead entries: the old code
+        // seeded `stillUsed` with pre-removal jump targets, which always
+        // contained the dead handler labels, so the orphaned ATHROW was never
+        // dropped. removeDeadCode/polish clean it later, but do it here.
+        Set<LabelNode> targets = ClassIO.jumpTargets(m);
 
         Set<LabelNode> stillUsed = new HashSet<>();
         if (m.tryCatchBlocks != null)
@@ -350,10 +440,9 @@ public final class Rewriter {
         boolean fieldIsApp = !owner.startsWith("java/")
                 && !owner.startsWith("javax/") && !owner.startsWith("jdk/")
                 && !owner.startsWith("sun/");
-        boolean callIsJdk = mi.owner.startsWith("java/") || mi.owner.startsWith("javax/")
-                || mi.owner.startsWith("jdk/") || mi.owner.startsWith("sun/");
 
-        if (callIsJdk && fieldIsApp) return false;
+        // JDK callbacks (sort/comparator, executors, MethodHandle, requireNonNullElseGet)
+        // can write app statics -> never assume JDK calls are pure.
         if (classes == null) return true;
 
         ClassNode target = classes.get(mi.owner + ".class");
@@ -361,27 +450,13 @@ public final class Rewriter {
 
             return true;
         }
-        return modSet(classes, cache, target, new HashSet<>()).contains(owner + "." + name);
+        Set<String> mods = modSet(classes, cache, target, new HashSet<>());
+        if (mods.contains("*bilinmeyen*")) return true;
+        return mods.contains(owner + "." + name);
     }
 
     private static boolean isReflectiveApi(MethodInsnNode mi) {
-        String k = mi.owner + "." + mi.name;
-        return k.equals("java/lang/Class.forName")
-                || k.equals("java/lang/Class.getMethod")
-                || k.equals("java/lang/Class.getDeclaredMethod")
-                || k.equals("java/lang/Class.getField")
-                || k.equals("java/lang/Class.getDeclaredField")
-                || k.equals("java/lang/Class.getMethods")
-                || k.equals("java/lang/Class.getDeclaredMethods")
-                || k.equals("java/lang/Class.getFields")
-                || k.equals("java/lang/Class.getDeclaredFields")
-                || k.equals("java/lang/reflect/Method.invoke")
-                || k.equals("java/lang/reflect/Field.get")
-                || k.equals("java/lang/reflect/Field.set")
-                || k.equals("java/lang/reflect/Field.getBoolean")
-                || k.equals("java/lang/reflect/Field.getInt")
-                || k.equals("java/lang/reflect/Field.setBoolean")
-                || k.equals("java/lang/reflect/Field.setInt");
+        return isFieldReflectiveRead(mi.owner, mi.name);
     }
 
     private static Set<String> modSet(Map<String, ClassNode> classes,
@@ -447,6 +522,10 @@ public final class Rewriter {
                 if (n instanceof LineNumberNode || n instanceof FrameNode) continue;
                 return null;
             }
+            // IINC mutates a local in place: it is not stack-transparent for
+            // producer search. Walking past it would attribute a stale value
+            // (e.g. ILOAD x; IINC x; ISTORE y must not resolve to the old x).
+            if (n instanceof IincInsnNode) return null;
             int op = n.getOpcode();
             if (op == Opcodes.ATHROW || op == Opcodes.RET || op == Opcodes.JSR
                     || (op >= Opcodes.IRETURN && op <= Opcodes.RETURN)) return null;
@@ -489,6 +568,8 @@ public final class Rewriter {
         for (int j = consumeIdx - 1; j >= 0; j--) {
             AbstractInsnNode n = ins.get(j);
             if (n instanceof LineNumberNode || n instanceof FrameNode) continue;
+            // Same IINC barrier as findProducer: never walk past a local mutation.
+            if (n instanceof IincInsnNode) return null;
             if (n instanceof LabelNode) {
                 if (blocking.contains(n)) return null;
                 continue;
@@ -609,19 +690,21 @@ public final class Rewriter {
             case Opcodes.IADD, Opcodes.ISUB, Opcodes.IMUL, Opcodes.IDIV, Opcodes.IREM,
                  Opcodes.IAND, Opcodes.IOR, Opcodes.IXOR, Opcodes.ISHL, Opcodes.ISHR,
                  Opcodes.IUSHR, Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV,
-                 Opcodes.FREM, Opcodes.LCMP, Opcodes.FCMPL, Opcodes.FCMPG,
-                 Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE, Opcodes.IF_ICMPLT,
+                 Opcodes.FREM, Opcodes.LCMP, Opcodes.FCMPL, Opcodes.FCMPG -> new int[]{2, 1};
+            case Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE, Opcodes.IF_ICMPLT,
                  Opcodes.IF_ICMPGE, Opcodes.IF_ICMPGT, Opcodes.IF_ICMPLE,
-                 Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE -> new int[]{2, 1};
+                 Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE -> new int[]{2, 0};
             case Opcodes.LADD, Opcodes.LSUB, Opcodes.LMUL, Opcodes.LDIV, Opcodes.LREM,
                  Opcodes.LAND, Opcodes.LOR, Opcodes.LXOR, Opcodes.DADD, Opcodes.DSUB,
                  Opcodes.DMUL, Opcodes.DDIV, Opcodes.DREM -> new int[]{4, 2};
             case Opcodes.LSHL, Opcodes.LSHR, Opcodes.LUSHR -> new int[]{3, 2};
             case Opcodes.INEG, Opcodes.FNEG, Opcodes.I2F, Opcodes.I2B, Opcodes.I2C, Opcodes.I2S,
-                 Opcodes.F2I, Opcodes.ARRAYLENGTH, Opcodes.MONITORENTER,
-                 Opcodes.MONITOREXIT -> new int[]{1, 1};
-            case Opcodes.LNEG, Opcodes.DNEG, Opcodes.I2L, Opcodes.I2D, Opcodes.F2L, Opcodes.F2D,
-                 Opcodes.L2D, Opcodes.D2L -> new int[]{2, 2};
+                 Opcodes.F2I, Opcodes.ARRAYLENGTH -> new int[]{1, 1};
+            case Opcodes.MONITORENTER,
+                 Opcodes.MONITOREXIT -> new int[]{1, 0};
+            case Opcodes.LNEG, Opcodes.DNEG,
+                  Opcodes.L2D, Opcodes.D2L -> new int[]{2, 2};
+            case Opcodes.I2L, Opcodes.I2D, Opcodes.F2L, Opcodes.F2D -> new int[]{1, 2};
             case Opcodes.L2I, Opcodes.L2F, Opcodes.D2I, Opcodes.D2F -> new int[]{2, 1};
             case Opcodes.IALOAD, Opcodes.FALOAD, Opcodes.AALOAD, Opcodes.BALOAD,
                  Opcodes.CALOAD, Opcodes.SALOAD -> new int[]{2, 1};
@@ -661,7 +744,6 @@ public final class Rewriter {
                 String key = pf.owner + "." + pf.name;
                 if (!hypo.containsKey(key)) continue;
                 if (!propagatable(prod, st.getOpcode())) continue;
-
                 List<AbstractInsnNode> loads = new ArrayList<>();
                 boolean ok = true;
                 for (int j = 0; j < ins.size(); j++) {
@@ -860,12 +942,12 @@ public final class Rewriter {
                         extHandles.add(h.getOwner());
                     else if (n instanceof TypeInsnNode t && t.desc.startsWith("L")) {
                         String o = t.desc.substring(1, t.desc.length() - 1);
-                        if (!o.equals(cn.name)) {  }
+                        if (!o.equals(cn.name)) { extMethodRefs.add(o); }
                     }
                 }
             }
             if (cn.superName != null && !cn.superName.equals("java/lang/Object"))
-                {  }
+                { extMethodRefs.add(cn.superName); }
         }
         List<String> dead = new ArrayList<>();
         for (ClassNode cn : classes.values()) {
@@ -884,12 +966,22 @@ public final class Rewriter {
             boolean typed = false;
             for (ClassNode o : classes.values()) {
                 if (o == cn) continue;
+                // Any symbolic reference keeps the class alive: type/field/method
+                // descriptors, invokedynamic BSM arguments (handles, types) and
+                // the BootstrapMethods attribute itself, not just raw opcodes.
+                if (refsType(o, cn.name)) { typed = true; break; }
                 for (MethodNode m : o.methods) {
                     for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
                         if (n instanceof TypeInsnNode t && t.desc.equals("L" + cn.name + ";")) { typed = true; break; }
                         if (n instanceof FieldInsnNode f && f.desc.contains("L" + cn.name + ";")) { typed = true; break; }
                         if (n instanceof MethodInsnNode mi
                                 && (mi.desc.contains("L" + cn.name + ";"))) { typed = true; break; }
+                        if (n instanceof InvokeDynamicInsnNode id) {
+                            if (id.desc.contains("L" + cn.name + ";")) { typed = true; break; }
+                            if (bsmRefs(id, cn.name)) { typed = true; break; }
+                        }
+                        if (n instanceof LdcInsnNode l && l.cst instanceof org.objectweb.asm.Type t
+                                && t.getInternalName().equals(cn.name)) { typed = true; break; }
                     }
                     if (typed) break;
                 }
@@ -900,6 +992,32 @@ public final class Rewriter {
         }
         for (String k : dead) classes.remove(k);
         return dead.size();
+    }
+
+    private static boolean refsType(ClassNode o, String internal) {
+        String needle = "L" + internal + ";";
+        if (o.superName != null && o.superName.equals(internal)) return true;
+        if (o.interfaces != null) for (String itf : o.interfaces) if (itf.equals(internal)) return true;
+        for (FieldNode f : o.fields) if (f.desc != null && f.desc.contains(needle)) return true;
+        for (MethodNode m : o.methods) {
+            if (m.desc != null && m.desc.contains(needle)) return true;
+            if (m.invisibleAnnotations != null) for (var a : m.invisibleAnnotations)
+                if (a.desc != null && a.desc.contains(needle)) return true;
+            if (m.visibleAnnotations != null) for (var a : m.visibleAnnotations)
+                if (a.desc != null && a.desc.contains(needle)) return true;
+        }
+        return false;
+    }
+
+    private static boolean bsmRefs(InvokeDynamicInsnNode id, String internal) {
+        if (id.bsm != null) {
+            if (internal.equals(id.bsm.getOwner())) return true;
+            if (id.bsmArgs != null) for (Object b : id.bsmArgs) {
+                if (b instanceof org.objectweb.asm.Handle h && internal.equals(h.getOwner())) return true;
+                if (b instanceof org.objectweb.asm.Type t && internal.equals(t.getInternalName())) return true;
+            }
+        }
+        return false;
     }
 
     public static int stripClinitLocalStatics(Map<String, ClassNode> classes, Set<String> original) {
@@ -938,17 +1056,16 @@ public final class Rewriter {
                 targets.add(f);
             }
             for (FieldNode f : targets) {
-                boolean wrote = false;
                 for (AbstractInsnNode x : ClassIO.list(cl)) {
                     if (!(x instanceof FieldInsnNode fx)) continue;
                     if (!fx.owner.equals(cn.name) || !fx.name.equals(f.name)) continue;
                     if (x.getOpcode() == Opcodes.PUTSTATIC) {
                         cl.instructions.set(x, new InsnNode(
                                 wideField(f.desc) ? Opcodes.POP2 : Opcodes.POP));
-                        wrote = true;
                         n++;
-                    } else if (x.getOpcode() == Opcodes.GETSTATIC && !wrote) {
-
+                    } else if (x.getOpcode() == Opcodes.GETSTATIC) {
+                        // Field never escapes clinit and is unread elsewhere:
+                        // every read (before or after the write) sees the JVM default.
                         cl.instructions.set(x, defaultOf(f.desc));
                         n++;
                     }
@@ -1104,6 +1221,31 @@ public final class Rewriter {
                         break;
                     }
                     AbstractInsnNode del = prod;
+                    // Only delete the pure producer chain. If anything between prod..x
+                    // may have side effects (call, invoke-dynamic, array/type new,
+                    // field PUT), just POP the dead PUT and keep the middle intact.
+                    boolean hasSideEffect = false;
+                    for (AbstractInsnNode y = prod; y != null; y = y.getNext()) {
+                        if (y instanceof MethodInsnNode || y instanceof InvokeDynamicInsnNode
+                                || y instanceof TypeInsnNode || y instanceof MultiANewArrayInsnNode) {
+                            if (y != prod || !(prod instanceof VarInsnNode
+                                    || prod instanceof LdcInsnNode || prod instanceof InsnNode)) {
+                                hasSideEffect = true;
+                                break;
+                            }
+                        }
+                        if (y instanceof FieldInsnNode ff && y.getOpcode() == Opcodes.PUTSTATIC
+                                && y != x) { hasSideEffect = true; break; }
+                        if (y == x) break;
+                    }
+                    if (hasSideEffect) {
+                        cl.instructions.set(x, new InsnNode(wideField(fi.desc)
+                                ? Opcodes.POP2 : Opcodes.POP));
+                        n++;
+                        changed = true;
+                        break;
+                    }
+                    del = prod;
                     while (true) {
                         AbstractInsnNode nx = del.getNext();
                         if (del.getOpcode() >= 0) mRemove(cl, del);
@@ -1138,8 +1280,7 @@ public final class Rewriter {
         for (ClassNode cn : classes.values())
             for (MethodNode m : cn.methods)
                 for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext())
-                    if (n instanceof FieldInsnNode f
-                            && (n.getOpcode() == Opcodes.GETSTATIC || n.getOpcode() == Opcodes.GETFIELD))
+                    if (n instanceof FieldInsnNode f && n.getOpcode() == Opcodes.GETSTATIC)
                         reads.add(f.owner + "." + f.name);
         Set<String> o = new HashSet<>();
         for (ClassNode cn : classes.values())
@@ -1169,13 +1310,14 @@ public final class Rewriter {
                     if (x instanceof InvokeDynamicInsnNode || x instanceof MultiANewArrayInsnNode) { ok = false; break; }
                     if (x instanceof MethodInsnNode mi) {
                         String o = mi.owner;
+                        // java/lang/Class is NOT pure (forName triggers <clinit>/IO).
                         boolean pure = o.equals("java/lang/String") || o.equals("java/lang/StringBuilder")
                                 || o.equals("java/lang/StringBuffer") || o.equals("java/lang/Integer")
                                 || o.equals("java/lang/Long") || o.equals("java/lang/Float")
                                 || o.equals("java/lang/Double") || o.equals("java/lang/Character")
                                 || o.equals("java/lang/Boolean") || o.equals("java/lang/Math")
                                 || o.equals("java/util/Objects") || o.equals("java/util/Arrays")
-                                || o.equals("java/lang/Object") || o.equals("java/lang/Class");
+                                || o.equals("java/lang/Object");
                         if (!pure) { ok = false; break; }
                     } else if (x instanceof FieldInsnNode f) {
                         if (op == Opcodes.PUTSTATIC) {
@@ -1268,6 +1410,12 @@ public final class Rewriter {
             used.add(lv.start);
             used.add(lv.end);
         }
+        // LineNumberNodes reference their labels too; dropping a label that a
+        // LineNumberNode still points at leaves a dangling reference and a
+        // corrupt LineNumberTable. Keep those labels as well.
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n instanceof LineNumberNode ln) used.add(ln.start);
+        }
         List<LabelNode> dead = new ArrayList<>();
         for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
             if (!(n instanceof LabelNode l)) continue;
@@ -1288,6 +1436,31 @@ public final class Rewriter {
         Set<String> called = new HashSet<>();
         Set<String> bsmTargets = new HashSet<>();
         Set<String> ldcNames = new HashSet<>();
+        boolean enumReflection = false;
+        for (ClassNode cn : classes.values()) {
+            for (MethodNode m : cn.methods) {
+                for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                    if (n instanceof MethodInsnNode mi) {
+                        // Name-based lookups (getDeclaredMethod("foo")) are already
+                        // protected via ldcNames below. But plural enumeration
+                        // (getDeclaredMethods() with no name) can reach ANY
+                        // private method, so those must be kept -- except ZKM's
+                        // own decrypt/lookup helpers, which are never
+                        // enumeration targets (they are only ever invoked
+                        // directly with int/long keys) and must go for the
+                        // output to be clean.
+                        String k = mi.owner + "." + mi.name;
+                        if (k.equals("java/lang/Class.getMethods")
+                                || k.equals("java/lang/Class.getDeclaredMethods")
+                                || k.equals("java/lang/Class.getFields")
+                                || k.equals("java/lang/Class.getDeclaredFields")
+                                || k.equals("java/lang/Class.getConstructors")
+                                || k.equals("java/lang/Class.getDeclaredConstructors"))
+                            enumReflection = true;
+                    }
+                }
+            }
+        }
         for (ClassNode cn : classes.values()) {
             for (MethodNode m : cn.methods) {
                 for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
@@ -1335,6 +1508,10 @@ public final class Rewriter {
                     if (called.contains(key)) continue;
                     if (bsmTargets.contains(cn.name + "." + m.name)) continue;
                     if (ldcNames.contains(m.name)) continue;
+                    // Plural reflective enumeration can reach any private
+                    // method by iteration, so those are kept -- with one
+                    // exception below.
+                    if (enumReflection && !isZkmHelperShape(cn, m)) continue;
                     del.add(m);
                 }
                 for (MethodNode d : del) {
@@ -1353,6 +1530,54 @@ public final class Rewriter {
                 || name.equals("readObjectNoData");
     }
 
+    // ZKM decrypt/lookup helper vocabulary: private static, int/long keyed.
+    // These are only ever invoked directly with int/long keys; no reflective
+    // enumeration targets them. (Body-shape checks were tried but ZKM emits
+    // several body variants -- swapped op order, DES-keyed, table/boxed
+    // mixes -- so the descriptor set is the stable signal. Anything outside
+    // this set stays protected while plural enumeration is present.)
+    private static boolean isZkmHelperShape(ClassNode cn, MethodNode m) {
+        if ((m.access & Opcodes.ACC_STATIC) == 0) return false;
+        String d = m.desc;
+        return d.equals("(IJ)I") || d.equals("(IJ)J") || d.equals("(IJ)Ljava/lang/String;")
+                || d.equals("(II)Ljava/lang/String;") || d.equals("(III)Ljava/lang/String;");
+    }
+
+    static boolean isFieldReflectiveRead(String owner, String name) {
+        String k = owner + "." + name;
+        return k.equals("java/lang/Class.forName")
+                || k.equals("java/lang/Class.getMethod")
+                || k.equals("java/lang/Class.getDeclaredMethod")
+                || k.equals("java/lang/Class.getMethods")
+                || k.equals("java/lang/Class.getDeclaredMethods")
+                || k.equals("java/lang/Class.getField")
+                || k.equals("java/lang/Class.getDeclaredField")
+                || k.equals("java/lang/Class.getFields")
+                || k.equals("java/lang/Class.getDeclaredFields")
+                || k.equals("java/lang/Class.getConstructors")
+                || k.equals("java/lang/Class.getDeclaredConstructors")
+                || k.equals("java/lang/reflect/Method.invoke")
+                || k.equals("java/lang/reflect/Field.get")
+                || k.equals("java/lang/reflect/Field.set")
+                || k.equals("java/lang/reflect/Field.getBoolean")
+                || k.equals("java/lang/reflect/Field.getByte")
+                || k.equals("java/lang/reflect/Field.getChar")
+                || k.equals("java/lang/reflect/Field.getShort")
+                || k.equals("java/lang/reflect/Field.getInt")
+                || k.equals("java/lang/reflect/Field.getLong")
+                || k.equals("java/lang/reflect/Field.getFloat")
+                || k.equals("java/lang/reflect/Field.getDouble")
+                || k.equals("java/lang/reflect/Field.getDeclaringClass")
+                || k.equals("java/lang/reflect/Field.setBoolean")
+                || k.equals("java/lang/reflect/Field.setByte")
+                || k.equals("java/lang/reflect/Field.setChar")
+                || k.equals("java/lang/reflect/Field.setShort")
+                || k.equals("java/lang/reflect/Field.setInt")
+                || k.equals("java/lang/reflect/Field.setLong")
+                || k.equals("java/lang/reflect/Field.setFloat")
+                || k.equals("java/lang/reflect/Field.setDouble");
+    }
+
     public static int inlineNeverWrittenStatics(Map<String, ClassNode> classes, boolean reflective) {
         if (reflective) return 0;
         Set<String> written = new HashSet<>();
@@ -1362,12 +1587,8 @@ public final class Rewriter {
                 for (AbstractInsnNode x = m.instructions.getFirst(); x != null; x = x.getNext()) {
                     if (x instanceof FieldInsnNode f && x.getOpcode() == Opcodes.PUTSTATIC)
                         written.add(f.owner + "." + f.name);
-                    if (x instanceof MethodInsnNode mi) {
-                        String k = mi.owner + "." + mi.name;
-                        if (k.equals("java/lang/reflect/Field.set")
-                                || k.equals("java/lang/Class.getDeclaredField")
-                                || k.equals("java/lang/Class.getField")) refl = true;
-                    }
+                    if (x instanceof MethodInsnNode mi && isFieldReflectiveRead(mi.owner, mi.name))
+                        refl = true;
                 }
         if (refl) return 0;
         Set<String> cand = new HashSet<>();
@@ -1433,19 +1654,7 @@ public final class Rewriter {
                         writes.add(f.owner + "." + f.name);
                     if (n instanceof LdcInsnNode l && l.cst instanceof String s) ldcNames.add(s);
                     if (n instanceof MethodInsnNode mi) {
-                        String k = mi.owner + "." + mi.name;
-                        if (k.equals("java/lang/Class.forName")
-                                || k.equals("java/lang/Class.getMethod")
-                                || k.equals("java/lang/Class.getDeclaredMethod")
-                                || k.equals("java/lang/Class.getField")
-                                || k.equals("java/lang/Class.getDeclaredField")
-                                || k.equals("java/lang/Class.getMethods")
-                                || k.equals("java/lang/Class.getDeclaredMethods")
-                                || k.equals("java/lang/Class.getFields")
-                                || k.equals("java/lang/Class.getDeclaredFields")
-                                || k.equals("java/lang/reflect/Method.invoke")
-                                || k.equals("java/lang/reflect/Field.get")
-                                || k.equals("java/lang/reflect/Field.set")) {
+                        if (isFieldReflectiveRead(mi.owner, mi.name)) {
                             hasReflectionApi = true;
                         }
                     }
@@ -1529,6 +1738,26 @@ public final class Rewriter {
             if (!reach.contains(i)) del.add(i);
         }
         for (AbstractInsnNode d : del) m.instructions.remove(d);
+        // Prune try entries left covering no executable code. An entry whose
+        // range holds no reachable instruction protects nothing; keeping it
+        // only risks degenerate (start==end) ranges after label cleanup.
+        if (!del.isEmpty() && m.tryCatchBlocks != null && !m.tryCatchBlocks.isEmpty()) {
+            Map<AbstractInsnNode, Integer> pos = new HashMap<>();
+            int pi = 0;
+            for (AbstractInsnNode i = m.instructions.getFirst(); i != null; i = i.getNext())
+                pos.put(i, pi++);
+            List<TryCatchBlockNode> drop = new ArrayList<>();
+            for (TryCatchBlockNode t : m.tryCatchBlocks) {
+                Integer s = pos.get(t.start), e = pos.get(t.end);
+                if (s == null || e == null || s >= e) { drop.add(t); continue; }
+                boolean any = false;
+                for (AbstractInsnNode i = t.start; i != null && i != t.end; i = i.getNext()) {
+                    if (i.getOpcode() >= 0 && reach.contains(i)) { any = true; break; }
+                }
+                if (!any) drop.add(t);
+            }
+            m.tryCatchBlocks.removeAll(drop);
+        }
         return del.size();
     }
 }

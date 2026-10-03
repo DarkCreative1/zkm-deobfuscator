@@ -94,14 +94,14 @@ public final class Pipeline {
 
                         if (dyn != null)
                             pl = dynTableValue(dyn, cn, dynTables, input, s.field(), s.idx());
-                        if (pl == null && table != null && s.idx() < table.size())
+                        if (pl == null && table != null && s.idx() >= 0 && s.idx() < table.size())
                             pl = table.get(s.idx());
                         if (pl == null) {
                             if (!emuTried) {
                                 emuTried = true;
                                 emu = TableExtractor.extractViaEmulation(cn, classes, dyn);
                             }
-                            if (emu != null && s.idx() < emu.strings().size())
+                            if (emu != null && s.idx() >= 0 && s.idx() < emu.strings().size())
                                 pl = emu.strings().get(s.idx());
                         }
                         if (pl == null) { strSkip.add(cn.name + "::" + s.mName() + " table-missing"); continue; }
@@ -158,9 +158,9 @@ public final class Pipeline {
                 Map<String, String> gg = FlowSimplifier.trivialGetters(cn);
                 for (int round = 0; round < 2; round++) {
                     Map<String, FlowSimplifier.Const> cc = round == 0
-                            ? FlowSimplifier.clinitConstants(cn)
+                            ? FlowSimplifier.clinitConstants(cn, classes)
                             : new HashMap<>(FlowSimplifier.unwrittenDefaultsFiltered(classes, reflectiveForFlow));
-                    if (round == 1) cc.putAll(FlowSimplifier.clinitConstants(cn));
+                    if (round == 1) cc.putAll(FlowSimplifier.clinitConstants(cn, classes));
                     for (MethodNode m : cn.methods) {
                         fold += FlowSimplifier.foldMethod(cn, m, cc, gg);
                         fold += Rewriter.stripNops(m);
@@ -202,8 +202,7 @@ public final class Pipeline {
             Set<String> manufactured = changelog == null
                     ? Set.of() : changelog.manufacturedFields;
 
-            Set<String> regenedAll = new HashSet<>();
-            Set<String> origFields = changelog == null ? null : changelog.originalFields;
+            Set<String> regenedAll = new HashSet<>();            Set<String> origFields = changelog == null ? null : changelog.originalFields;
             try {
                 dead += Rewriter.removeDeadMethods(classes);
                 try {
@@ -271,6 +270,11 @@ public final class Pipeline {
                 } catch (Throwable t) {
                     strSkip.add(cn.name + " param-analiz-hatasi");
                 }
+            }
+            try {
+                ParamRestorer.retainConsistent(classes, plans, newDescs);
+            } catch (Throwable t) {
+                strSkip.add("param-consistency-error");
             }
             try {
                 int paramCalls0 = ParamRestorer.rewriteCallers(classes, newDescs);
@@ -374,6 +378,11 @@ public final class Pipeline {
                     if (Boolean.getBoolean("zkmdeobf.debugWrite"))
                         System.err.println("[yazim-hatasi] " + e.getKey() + ": " + ex);
                     strSkip.add(e.getKey() + " yazim-hatasi:" + ex.getClass().getSimpleName());
+                    // Never drop a class: fall back to the already-encoded (or
+                    // raw) bytes from the first pass instead of emitting a jar
+                    // with a missing member of the hierarchy.
+                    byte[] prev = out.get(e.getKey());
+                    if (prev != null) final2.put(e.getKey(), prev);
                 }
             }
             for (Map.Entry<String, byte[]> en : raw.entrySet()) {
@@ -551,7 +560,9 @@ public final class Pipeline {
             if (lookup == null) return null;
             IntRecovery.LookupParams p = IntRecovery.params(cn, lookup);
             if (p == null) return null;
-            int idx = (int) (s.arg() ^ (s.key() & p.mask()) ^ p.indexXor());
+            long l = (s.arg() ^ (s.key() & p.mask()) ^ p.indexXor());
+            if (l < 0 || l > Integer.MAX_VALUE) return null;
+            int idx = (int) l;
 
             List<String> table = null;
             TableExtractor.Tables te = staticTableCache.get(cn.name);
@@ -609,6 +620,9 @@ public final class Pipeline {
     }
 
     private static URLClassLoader dynLoader(String jar) {
+        // Untrusted-input escape hatch: --no-dyn disables ALL dynamic
+        // recovery (class loading + reflective invocation of obfuscated code).
+        if ("false".equals(System.getProperty("zkmdeobf.dyn", "true"))) return null;
         try {
             return new URLClassLoader(new URL[]{new File(jar).toURI().toURL()},
                     ClassLoader.getSystemClassLoader().getParent());
@@ -621,6 +635,7 @@ public final class Pipeline {
                                         Map<String, List<String>> cache, String input,
                                         String field, int idx) {
         try {
+            if (idx < 0) return null;
             List<String> arr = cache.get(field);
             if (arr == null) {
                 Class<?> c = Class.forName(cn.name.replace('/', '.'), true, dyn);
@@ -691,8 +706,8 @@ public final class Pipeline {
                 }
                 if (mi.desc.equals("(III)Ljava/lang/String;") && p.length == 3
                         && p[0] == int.class && p[1] == int.class && p[2] == int.class) {
-
-                    return (String) m2.invoke(null, s.encIdx(), s.key(), 0);
+                    // Third arg is a salt/nonce captured at the call site; never hardcode.
+                    return (String) m2.invoke(null, s.encIdx(), s.key(), s.extra());
                 }
             }
         } catch (Throwable t) {  }

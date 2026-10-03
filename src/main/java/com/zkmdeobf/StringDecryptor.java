@@ -227,7 +227,12 @@ public final class StringDecryptor {
     }
 
     public record LookupSite(String mName, String mDesc, int encIdx, int key,
-                             AbstractInsnNode from, AbstractInsnNode invoke) {}
+                             AbstractInsnNode from, AbstractInsnNode invoke, int extra) {
+        public LookupSite(String mName, String mDesc, int encIdx, int key,
+                          AbstractInsnNode from, AbstractInsnNode invoke) {
+            this(mName, mDesc, encIdx, key, from, invoke, 0);
+        }
+    }
 
     public static List<LookupSite> lookupSites(ClassNode cn, MethodNode m, String desc) {
         List<LookupSite> o = new ArrayList<>();
@@ -253,7 +258,7 @@ public final class StringDecryptor {
                 Integer c = ClassIO.constInt(ins.get(realIdx.get(ri - 1)));
                 if (c == null) c = ldcInt(cn, ins.get(realIdx.get(ri - 1)));
                 if (a != null && b != null && c != null)
-                    o.add(new LookupSite(m.name, m.desc, a ^ c, b, ins.get(realIdx.get(ri - 3)), n));
+                    o.add(new LookupSite(m.name, m.desc, a ^ c, b, ins.get(realIdx.get(ri - 3)), n, c));
                 continue;
             }
             Integer a = ClassIO.constInt(ins.get(realIdx.get(ri - 2)));

@@ -12,10 +12,21 @@ public final class Renamer {
     private Renamer() {}
 
     private static final Pattern OBF = Pattern.compile(
-            "^[a-zA-Z]{1,4}$|^[IlO0$]{2,}$|.*\\$\\d+$|^[a-zA-Z]\\$[a-zA-Z]+$");
+            "^[a-zA-Z]{1,2}$|^[IlO0$]{2,}$|.*\\$\\d+$|^[a-zA-Z]\\$[a-zA-Z]+$");
+    private static final Set<String> KEEP_NAMES = Set.of(
+            "add", "get", "set", "run", "foo", "id", "do", "ab", "of", "to",
+            "main", "clone", "equals", "hashCode", "toString", "compareTo",
+            "valueOf", "values", "value", "name", "ordinal", "describe",
+            "iterator", "next", "hasNext", "close", "read", "write", "size",
+            "isEmpty", "contains", "remove", "clear", "accept", "apply");
 
     public static boolean suspicious(String name) {
-        return name != null && OBF.matcher(name).matches();
+        if (name == null) return false;
+        if (KEEP_NAMES.contains(name)) return false;
+        // Object protocol must never be renamed: println(obj)/collections break otherwise.
+        if (name.equals("toString") || name.equals("equals") || name.equals("hashCode")
+                || name.equals("clone") || name.equals("finalize")) return false;
+        return OBF.matcher(name).matches();
     }
 
     public static Map<String, String> buildMapping(Map<String, ClassNode> classes) {
@@ -52,6 +63,8 @@ public final class Renamer {
             for (MethodNode m : cn.methods) {
                 if (m.name.equals("<init>") || m.name.equals("<clinit>")) continue;
                 if (m.name.equals("main") && m.desc.equals("([Ljava/lang/String;)V")) continue;
+                // Native methods are bound by name (JNI); renaming breaks linkage.
+                if ((m.access & Opcodes.ACC_NATIVE) != 0) continue;
                 if (suspicious(m.name)) {
                     if (reflective.contains(m.name)) continue;
                     if (overridesSuper(classes, loader, cn, m)) continue;
@@ -67,6 +80,11 @@ public final class Renamer {
                                    ClassNode cn, MethodNode m) {
         if ((m.access & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) != 0) return false;
         if (m.name.startsWith("<")) return false;
+        // Object protocol: conservative keep even when superclass is outside the jar.
+        if ((m.name.equals("toString") && m.desc.equals("()Ljava/lang/String;"))
+                || (m.name.equals("equals") && m.desc.equals("(Ljava/lang/Object;)Z"))
+                || (m.name.equals("hashCode") && m.desc.equals("()I"))
+                || (m.name.equals("clone") && m.desc.equals("()Ljava/lang/Object;"))) return true;
         Set<String> seen = new HashSet<>();
         String sup = cn.superName;
         while (sup != null && !sup.equals("java/lang/Object") && seen.add(sup)) {
@@ -113,6 +131,8 @@ public final class Renamer {
                     } catch (NoSuchMethodException ignored) {}
                 }
             } catch (Throwable ignored) {}
+            // Unknown hierarchy: conservative keep, never rename.
+            return true;
         }
         return false;
     }

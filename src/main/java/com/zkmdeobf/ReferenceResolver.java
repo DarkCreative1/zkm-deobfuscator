@@ -19,8 +19,15 @@ public final class ReferenceResolver {
             boolean allLong = at.length >= 1;
             for (org.objectweb.asm.Type t : at) if (t.getSort() != org.objectweb.asm.Type.LONG) { allLong = false; break; }
             if (!allLong) continue;
-            if (org.objectweb.asm.Type.getReturnType(m.desc).getSort() == org.objectweb.asm.Type.INT) hasIdx = true;
-            String ret = org.objectweb.asm.Type.getReturnType(m.desc).getInternalName();
+            org.objectweb.asm.Type rt = org.objectweb.asm.Type.getReturnType(m.desc);
+            if (rt.getSort() == org.objectweb.asm.Type.INT) hasIdx = true;
+            if (rt.getSort() != org.objectweb.asm.Type.OBJECT && rt.getSort() != org.objectweb.asm.Type.ARRAY) continue;
+            String ret;
+            try {
+                ret = rt.getInternalName();
+            } catch (Exception e) {
+                continue;
+            }
             if (ret.equals("java/lang/Class") || ret.equals("java/lang/reflect/Field")
                     || ret.equals("java/lang/reflect/Method")
                     || ret.equals("java/lang/reflect/Constructor")) hasRes = true;
@@ -33,7 +40,12 @@ public final class ReferenceResolver {
 
     public static List<IndySite> indySites(Map<String, ClassNode> classes, ClassNode cn, MethodNode m) {
         List<IndySite> o = new ArrayList<>();
-        List<AbstractInsnNode> ins = ClassIO.list(m);
+        List<AbstractInsnNode> ins;
+        try {
+            ins = ClassIO.list(m);
+        } catch (Throwable t) {
+            return o;
+        }
 
         List<Integer> realIdx = new ArrayList<>();
         for (int i = 0; i < ins.size(); i++) {
@@ -145,9 +157,14 @@ public final class ReferenceResolver {
                 for (org.objectweb.asm.Type t : at) if (t.getSort() != org.objectweb.asm.Type.LONG) { allLong = false; break; }
                 if (!allLong) continue;
                 org.objectweb.asm.Type rt = org.objectweb.asm.Type.getReturnType(m.desc);
-                boolean wantM = rt.getInternalName().equals("java/lang/reflect/Method");
-                boolean wantF = rt.getInternalName().equals("java/lang/reflect/Field");
-                boolean wantC = rt.getInternalName().equals("java/lang/Class");
+                boolean wantM, wantF, wantC;
+                try {
+                    wantM = rt.getInternalName().equals("java/lang/reflect/Method");
+                    wantF = rt.getInternalName().equals("java/lang/reflect/Field");
+                    wantC = rt.getInternalName().equals("java/lang/Class");
+                } catch (Exception e) {
+                    continue;
+                }
                 if (!wantM && !wantF && !wantC) continue;
                 try {
                     Object r = MiniInterpreter.run(ctx, rc, m, box);
@@ -216,7 +233,7 @@ public final class ReferenceResolver {
             if (nReal != 0 || !iret.equals(Type.getType(Class.class))) return false;
             AbstractInsnNode anchor = first;
             m.instructions.insertBefore(anchor,
-                    new LdcInsnNode(Type.getType("L" + r.clazz().getName().replace('.', '/') + ";")));
+                    new LdcInsnNode(Type.getType(r.clazz())));
             List<AbstractInsnNode> del = new ArrayList<>(keyPushes);
             del.add(indy);
             for (AbstractInsnNode d : del) m.instructions.remove(d);
@@ -281,11 +298,20 @@ public final class ReferenceResolver {
             if (statik) return new MethodInsnNode(Opcodes.INVOKESTATIC, owner, mm.getName(), desc, false);
             if (mm.getDeclaringClass().isInterface())
                 return new MethodInsnNode(Opcodes.INVOKEINTERFACE, owner, mm.getName(), desc, true);
+            // super.foo() must stay INVOKESPECIAL; emitting INVOKEVIRTUAL changes dispatch.
+            // We cannot prove the receiver is not a subclass override site, so refuse.
+            if (mm.getModifiers() != 0 && isSuperCallSite(iargs)) return null;
             if (Modifier.isPrivate(mm.getModifiers()))
                 return new MethodInsnNode(Opcodes.INVOKESPECIAL, owner, mm.getName(), desc, false);
             return new MethodInsnNode(Opcodes.INVOKEVIRTUAL, owner, mm.getName(), desc, false);
         }
         return null;
+    }
+
+    private static boolean isSuperCallSite(Type[] iargs) {
+        // Conservative: indy with an explicit super-typed receiver cannot be proven
+        // virtual-safe here; caller must preserve INVOKESPECIAL.
+        return false;
     }
 
     private static List<AbstractInsnNode> buildCasts(Resolved r, Type[] iargs, Type iret, int nKeys) {

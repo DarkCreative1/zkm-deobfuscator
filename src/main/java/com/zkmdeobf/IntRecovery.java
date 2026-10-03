@@ -28,6 +28,7 @@ public final class IntRecovery {
     }
 
     public static LookupParams params(ClassNode cn, MethodNode lookup) {
+        if (cn == null || lookup == null) return null;
         List<AbstractInsnNode> ins = ClassIO.list(lookup);
         List<AbstractInsnNode> real = new ArrayList<>();
         for (AbstractInsnNode n : ins) {
@@ -35,19 +36,22 @@ public final class IntRecovery {
             if (n.getOpcode() == Opcodes.NOP) continue;
             real.add(n);
         }
+        List<LookupParams> found = new ArrayList<>();
         for (int k = 0; k + 5 < real.size(); k++) {
             int[] ops = new int[6];
             for (int i = 0; i < 6; i++) ops[i] = real.get(k + i).getOpcode();
             if (ops[0] == Opcodes.LDC && ops[1] == Opcodes.LAND && ops[2] == Opcodes.L2I
                     && ops[3] == Opcodes.IXOR && ops[5] == Opcodes.IXOR) {
+                // ops[4] must be a key push (const or LDC int); otherwise mask/xor is garbage.
                 AbstractInsnNode n0 = real.get(k), n4 = real.get(k + 4);
                 if (!(n0 instanceof LdcInsnNode) || !(((LdcInsnNode) n0).cst instanceof Long)) continue;
                 Integer kk = ClassIO.constInt(n4);
                 if (kk == null) continue;
-                return new LookupParams((Long) ((LdcInsnNode) n0).cst, kk);
+                found.add(new LookupParams((Long) ((LdcInsnNode) n0).cst, kk));
             }
         }
-        return null;
+        if (found.isEmpty()) return null;
+        return found.get(0);
     }
 
     public static List<Site> sites(ClassNode cn, MethodNode m, String desc) {
@@ -74,10 +78,15 @@ public final class IntRecovery {
 
                 int found = -1;
                 int d1 = 1;
+                Set<LabelNode> tgts = ClassIO.jumpTargets(m);
                 outer:
                 for (int q = realIdx.get(ri - 1) - 1; q >= 0; q--) {
                     AbstractInsnNode x = ins.get(q);
-                    if (x instanceof LabelNode) break;
+                    if (x instanceof LabelNode ln) {
+                        // Only a real jump/try target blocks the walk; debug labels don't.
+                        if (tgts.contains(ln)) break;
+                        continue;
+                    }
                     if (x instanceof LineNumberNode || x instanceof FrameNode) continue;
                     if (x.getOpcode() == Opcodes.NOP) continue;
                     int xo = x.getOpcode();
@@ -112,21 +121,24 @@ public final class IntRecovery {
     }
 
     public static int recoverInt(int arg, long key, long mask, int xor, long[] enc) {
-        int idx = (int) (arg ^ (key & mask) ^ xor);
-        if (idx < 0 || idx >= enc.length) throw new IllegalArgumentException("idx-aralik:" + idx);
-        return (int) (enc[idx] ^ key);
+        if (enc == null) throw new IllegalArgumentException("enc==null");
+        long l = (arg ^ (key & mask) ^ xor);
+        if (l < 0 || l >= enc.length) throw new IllegalArgumentException("idx-aralik:" + l);
+        return (int) (enc[(int) l] ^ key);
     }
 
     public static long recoverLong(int arg, long key, long mask, int xor, long[] enc) {
-        int idx = (int) (arg ^ (key & mask) ^ xor);
-        if (idx < 0 || idx >= enc.length) throw new IllegalArgumentException("idx-aralik:" + idx);
-        return enc[idx] ^ key;
+        if (enc == null) throw new IllegalArgumentException("enc==null");
+        long l = (arg ^ (key & mask) ^ xor);
+        if (l < 0 || l >= enc.length) throw new IllegalArgumentException("idx-aralik:" + l);
+        return enc[(int) l] ^ key;
     }
 
     public static long recoverLongDes(int arg, long key, long mask, int xor, long[] enc) {
-        int idx = (int) (arg ^ (key & mask) ^ xor);
-        if (idx < 0 || idx >= enc.length) throw new IllegalArgumentException("idx-aralik:" + idx);
-        return Crypto.desLongCrypt(enc[idx], key, true);
+        if (enc == null) throw new IllegalArgumentException("enc==null");
+        long l = (arg ^ (key & mask) ^ xor);
+        if (l < 0 || l >= enc.length) throw new IllegalArgumentException("idx-aralik:" + l);
+        return Crypto.desLongCrypt(enc[(int) l], key, true);
     }
 
     public static boolean isDesLookup(ClassNode cn, MethodNode lookup) {

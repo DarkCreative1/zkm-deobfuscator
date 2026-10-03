@@ -72,6 +72,7 @@ public final class ChangeLogMap {
                 String orig = sc.group(1);
                 String obf = m.byOrig.get(orig);
                 if (obf != null) { ctxOrig = orig; ctxObf = obf; }
+                else { ctxOrig = null; ctxObf = null; }
                 inMethods = t.startsWith("Methods");
                 inFields = t.startsWith("Fields");
                 continue;
@@ -169,7 +170,8 @@ public final class ChangeLogMap {
         String typePart = left.substring(0, sp);
         int sp2 = typePart.lastIndexOf(' ');
         String origType = sp2 < 0 ? typePart : typePart.substring(sp2 + 1);
-        String obfName = seg[seg.length - 1].trim();
+        String obfName = stripMarkers(seg[seg.length - 1].trim());
+        if (obfName.isEmpty()) return;
         String obfDesc;
         try {
             obfDesc = toDesc(origType);
@@ -210,6 +212,18 @@ public final class ChangeLogMap {
         }
     }
 
+    private static String stripGenerics(String s) {
+        StringBuilder o = new StringBuilder();
+        int depth = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') { if (depth > 0) depth--; }
+            else if (depth == 0) o.append(c);
+        }
+        return o.toString();
+    }
+
     static String paramsToDesc(String params) {
         params = params.trim();
         if (params.isEmpty()) return "";
@@ -235,7 +249,17 @@ public final class ChangeLogMap {
     }
 
     static String toDesc(String src) {
+        if (src == null || src.isEmpty()) throw new IllegalArgumentException("empty desc");
         src = src.trim();
+        if (src.endsWith("...")) src = src.substring(0, src.length() - 3).trim() + "[]";
+        // Strip generics: List<String> -> List, Map<K,V> -> Map, ? extends X -> X.
+        src = stripGenerics(src).trim();
+        if (src.startsWith("?")) {
+            if (src.startsWith("? extends ")) src = src.substring(10).trim();
+            else if (src.startsWith("? super ")) src = src.substring(8).trim();
+            else src = "java.lang.Object";
+            src = stripGenerics(src).trim();
+        }
         int arr = 0;
         while (src.endsWith("[]")) {
             arr++;

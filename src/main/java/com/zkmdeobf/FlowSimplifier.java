@@ -16,6 +16,10 @@ public final class FlowSimplifier {
     public record NullConst() implements Const {}
 
     public static Map<String, Const> clinitConstants(ClassNode cn) {
+        return clinitConstants(cn, null);
+    }
+
+    public static Map<String, Const> clinitConstants(ClassNode cn, Map<String, ClassNode> classes) {
         Map<String, Const> o = new HashMap<>();
         MethodNode cl = ClassIO.findMethod(cn, "<clinit>", "()V");
         if (cl == null) return o;
@@ -35,12 +39,18 @@ public final class FlowSimplifier {
         }
 
         Set<String> elsewhere = new HashSet<>();
-        for (MethodNode m : cn.methods) {
-            if (m == cl) continue;
-            for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
-                if ((n.getOpcode() == Opcodes.PUTSTATIC) && n instanceof FieldInsnNode) {
-                    FieldInsnNode f = (FieldInsnNode) n;
-                    if (f.owner.equals(cn.name)) elsewhere.add(f.owner + "." + f.name);
+        // A field is only a class-init constant if NOBODY else writes it:
+        // not another method of this class, and not any method of any other
+        // class in the jar (e.g. a helper that mutates A.flag from B).
+        Iterable<ClassNode> scope = classes == null ? List.of(cn) : classes.values();
+        for (ClassNode other : scope) {
+            for (MethodNode m : other.methods) {
+                if (other == cn && m == cl) continue;
+                for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                    if ((n.getOpcode() == Opcodes.PUTSTATIC) && n instanceof FieldInsnNode) {
+                        FieldInsnNode f = (FieldInsnNode) n;
+                        if (f.owner.equals(cn.name)) elsewhere.add(f.owner + "." + f.name);
+                    }
                 }
             }
         }
@@ -122,7 +132,7 @@ public final class FlowSimplifier {
                 int n = 0;
                 for (ClassNode cn : classes.values()) {
                     Map<String, Const> cc = new HashMap<>(hypo);
-                    cc.putAll(clinitConstants(cn));
+                    cc.putAll(clinitConstants(cn, classes));
                     Map<String, String> gg = trivialGetters(cn);
                     for (MethodNode m : cn.methods) {
                         n += foldMethod(cn, m, cc, gg);
@@ -195,7 +205,7 @@ public final class FlowSimplifier {
         if (used.isEmpty()) return true;
         Map<String, Integer> writes = countWrites(classes);
         Map<String, Map<String, Const>> clinits = new HashMap<>();
-        for (ClassNode cn : classes.values()) clinits.put(cn.name, clinitConstants(cn));
+        for (ClassNode cn : classes.values()) clinits.put(cn.name, clinitConstants(cn, classes));
         for (String key : used) {
             int dot = key.lastIndexOf('.');
             if (dot < 0) return false;
@@ -553,6 +563,11 @@ public final class FlowSimplifier {
                     if (isProducedOperand(qa)) ops2.add(qa);
                     if (isProducedOperand(qb)) ops2.add(qb);
                     ops2.add(prev);
+                    // Only fold when the compare chain is self-contained:
+                    // no other real instructions and no live labels between
+                    // the operands and the branch. Otherwise removing the
+                    // operands would corrupt the stack or control flow.
+                    if (!onlyBetween(m, ins, qa, cur, new HashSet<>(ops2))) continue;
                     noteUsed(qa);
                     noteUsed(qb);
                     takenHelper(m, j, ops2, taken);
@@ -588,6 +603,7 @@ public final class FlowSimplifier {
                     if (isProducedDouble(qa)) ops2.add(qa);
                     if (isProducedDouble(qb)) ops2.add(qb);
                     ops2.add(prev);
+                    if (!onlyBetween(m, ins, qa, cur, new HashSet<>(ops2))) continue;
                     noteUsed(qa);
                     noteUsed(qb);
                     takenHelper(m, j, ops2, taken);
@@ -610,6 +626,11 @@ public final class FlowSimplifier {
                         if (t != null) {
                             operands.add(prev);
                             operands.add(p2);
+                            if (!onlyBetween(m, ins, p2, cur, new HashSet<>(operands))) {
+                                operands.clear();
+                                c = null;
+                                continue;
+                            }
                             noteUsed(p2);
                             takenHelper(m, j, operands, t);
                             n += operands.size() + 1;
@@ -677,6 +698,27 @@ public final class FlowSimplifier {
         for (AbstractInsnNode o : operands) m.instructions.remove(o);
         if (taken) m.instructions.set(j, new JumpInsnNode(Opcodes.GOTO, j.label));
         else m.instructions.remove(j);
+    }
+
+    private static boolean onlyBetween(MethodNode m, List<AbstractInsnNode> ins,
+                                       AbstractInsnNode from, AbstractInsnNode to,
+                                       Set<AbstractInsnNode> allowed) {
+        if (from == null) return false;
+        allowed.add(to);
+        Set<LabelNode> bounds = new HashSet<>();
+        if (m.tryCatchBlocks != null) for (TryCatchBlockNode t : m.tryCatchBlocks) {
+            bounds.add(t.start); bounds.add(t.end); bounds.add(t.handler);
+        }
+        Set<LabelNode> tgts = ClassIO.jumpTargets(m);
+        AbstractInsnNode n = from;
+        while (true) {
+            if (n instanceof LabelNode && (bounds.contains(n) || tgts.contains(n))) return false;
+            if (n.getOpcode() >= 0 && !allowed.contains(n)) return false;
+            if (n == to) break;
+            n = n.getNext();
+            if (n == null) return false;
+        }
+        return true;
     }
 
     private static Long longOperand(ClassNode cn, Map<String, Const> consts, AbstractInsnNode n) {

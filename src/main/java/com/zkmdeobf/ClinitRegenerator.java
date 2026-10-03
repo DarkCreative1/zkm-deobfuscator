@@ -239,6 +239,19 @@ public final class ClinitRegenerator {
         return false;
     }
 
+    private static int arrayLen(Object data) {
+        if (data instanceof int[] x) return x.length;
+        if (data instanceof long[] x) return x.length;
+        if (data instanceof byte[] x) return x.length;
+        if (data instanceof char[] x) return x.length;
+        if (data instanceof boolean[] x) return x.length;
+        if (data instanceof float[] x) return x.length;
+        if (data instanceof double[] x) return x.length;
+        if (data instanceof short[] x) return x.length;
+        if (data instanceof Object[] x) return x.length;
+        return Integer.MAX_VALUE;
+    }
+
     private static boolean emitValue(List<AbstractInsnNode> emit, String desc, Object v) {
         if (v == null || v == MiniInterpreter.NULL) {
             emit.add(new InsnNode(Opcodes.ACONST_NULL));
@@ -249,12 +262,22 @@ public final class ClinitRegenerator {
         if (v instanceof Float f) { emit.add(new LdcInsnNode(f)); return true; }
         if (v instanceof Double d) { emit.add(new LdcInsnNode(d)); return true; }
         if (v instanceof String s) { emit.add(new LdcInsnNode(s)); return true; }
+        if (v instanceof Boolean b) {
+            emit.add(new InsnNode(b ? Opcodes.ICONST_1 : Opcodes.ICONST_0));
+            return true;
+        }
+        if (v instanceof Character c) { emit.add(new LdcInsnNode((int) c)); return true; }
+        if (v instanceof Byte by) { emit.add(new LdcInsnNode((int) by)); return true; }
+        if (v instanceof Short sh) { emit.add(new LdcInsnNode((int) sh)); return true; }
         if (v instanceof MiniInterpreter.Arr a) return emitArray(emit, desc, a.data);
         return false;
     }
 
     private static boolean emitArray(List<AbstractInsnNode> emit, String desc, Object data) {
-        if (data instanceof int[] x) {
+        // Cap emitted initializers: a huge ZKM table would otherwise blow the
+        // 64KB method limit and fail verification. Refuse instead of writing
+        // a broken <clinit>.
+        if (arrayLen(data) > 4096 || emit.size() > 40000) return false;        if (data instanceof int[] x) {
             emit.add(new LdcInsnNode(x.length));
             emit.add(new IntInsnNode(Opcodes.NEWARRAY, 10));
             for (int i = 0; i < x.length; i++) {

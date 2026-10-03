@@ -83,14 +83,14 @@ def detect_fake_handlers(cf: ClassFile) -> list[FlowFinding]:
                                        f"handler@{h} {len(body)} instr icinde athrow — muhtemel sahte.",
                                        "medium"))
 
-        for fr in cf.methods:
-            if fr.code and len(fr.code) <= 8:
-                ops = [o for _, o, _ in disassemble(fr.code)]
-                if ops[:3] == [25, 25, 176] or ops == [42, 176] or (ops and ops[-1] == 176 and len(ops) <= 3):
-                    out.append(FlowFinding("IDENTITY_STUB", f"{cf.path}::{fr.name}{fr.desc}",
-                                           "static (T)T{aload;areturn} — ExceptionObfuscator identity stub. "
-                                           "Call-site invokestatic nop'a indirgenebilir.", "medium"))
-                    break
+    for fr in cf.methods:
+        if fr.code and len(fr.code) <= 8:
+            ops = [o for _, o, _ in disassemble(fr.code)]
+            if ops[:3] == [25, 25, 176] or ops == [42, 176] or (ops and ops[-1] == 176 and len(ops) <= 3):
+                out.append(FlowFinding("IDENTITY_STUB", f"{cf.path}::{fr.name}{fr.desc}",
+                                       "static (T)T{aload;areturn} — ExceptionObfuscator identity stub. "
+                                       "Call-site invokestatic nop'a indirgenebilir.", "medium"))
+                break
     return out
 
 def detect_trampolines(cf: ClassFile) -> list[FlowFinding]:

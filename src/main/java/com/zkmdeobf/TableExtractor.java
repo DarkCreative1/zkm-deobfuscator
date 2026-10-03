@@ -233,15 +233,15 @@ public final class TableExtractor {
         return false;
     }
 
-    private static byte[] concatBytes(List<String> chunks) {        try {
+    private static byte[] concatBytes(List<String> chunks) {
+        try {
+            java.nio.charset.CharsetEncoder enc = StandardCharsets.ISO_8859_1.newEncoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
             java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
             for (String c : chunks) {
+                if (!enc.canEncode(c)) return null;
                 byte[] b = c.getBytes(StandardCharsets.ISO_8859_1);
-                if (b.length != c.length()) {
-
-                    b = c.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                    if (b.length == 0) return null;
-                }
                 o.write(b, 0, b.length);
             }
             return o.toByteArray();

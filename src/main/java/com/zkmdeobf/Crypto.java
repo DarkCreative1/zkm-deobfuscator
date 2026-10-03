@@ -12,6 +12,9 @@ public final class Crypto {
     private Crypto() {}
 
     public static String xorWithKeys(String s, int[] keys) {
+        java.util.Objects.requireNonNull(s, "s");
+        java.util.Objects.requireNonNull(keys, "keys");
+        if (keys.length == 0) throw new IllegalArgumentException("empty keys");
         char[] c = s.toCharArray();
         for (int i = 0; i < c.length; i++) c[i] = (char) (c[i] ^ keys[i % keys.length]);
         return new String(c);
@@ -73,27 +76,20 @@ public final class Crypto {
     }
 
     public static long bytesToLong(byte[] b) {
+        if (b == null || b.length < 8) throw new IllegalArgumentException("bytesToLong needs 8 bytes");
         long v = 0;
         for (int i = 0; i < 8; i++) v = (v << 8) | (b[i] & 0xFF);
         return v;
     }
 
     private static byte[] desCbc(byte[] data, byte[] key8, boolean decrypt, boolean pad) throws Exception {
-
         Cipher ch = Cipher.getInstance("DES/CBC/" + (pad ? "PKCS5Padding" : "NoPadding"));
         SecretKeyFactory f = SecretKeyFactory.getInstance("DES");
         ch.init(decrypt ? Cipher.DECRYPT_MODE : Cipher.ENCRYPT_MODE,
                 f.generateSecret(new DESKeySpec(key8)), new IvParameterSpec(new byte[8]));
-        byte[] out = ch.doFinal(data);
-        if (decrypt && pad && out.length > 0) {
-            int p = out[out.length - 1] & 0xFF;
-            if (p >= 1 && p <= 8) {
-                boolean ok = true;
-                for (int i = out.length - p; i < out.length; i++) if ((out[i] & 0xFF) != p) ok = false;
-                if (ok) { byte[] t = new byte[out.length - p]; System.arraycopy(out, 0, t, 0, t.length); out = t; }
-            }
-        }
-        return out;
+        // PKCS5Padding is already stripped by JCE on decrypt; never strip manually
+        // or plaintext ending in 0x01..0x08 gets silently truncated.
+        return ch.doFinal(data);
     }
 
     public static String desStringEncrypt(String plain, long key) {
@@ -129,19 +125,34 @@ public final class Crypto {
     }
 
     public static String mutf8Decode(byte[] b) {
+        if (b == null) throw new IllegalArgumentException("b==null");
         StringBuilder o = new StringBuilder();
         int i = 0;
         while (i < b.length) {
             int a = b[i] & 0xFF;
             if (a < 0x80) { if (a == 0) break; o.append((char) a); i++; }
-            else if ((a & 0xE0) == 0xC0) { o.append((char) (((a & 0x1F) << 6) | (b[i + 1] & 0x3F))); i += 2; }
-            else { o.append((char) (((a & 0x0F) << 12) | ((b[i + 1] & 0x3F) << 6) | (b[i + 2] & 0x3F))); i += 3; }
+            else if ((a & 0xE0) == 0xC0) {
+                if (i + 1 >= b.length) throw new IllegalArgumentException("truncated MUTF-8 2-byte seq");
+                o.append((char) (((a & 0x1F) << 6) | (b[i + 1] & 0x3F))); i += 2;
+            }
+            else {
+                if (i + 2 >= b.length) throw new IllegalArgumentException("truncated MUTF-8 3-byte seq");
+                o.append((char) (((a & 0x0F) << 12) | ((b[i + 1] & 0x3F) << 6) | (b[i + 2] & 0x3F))); i += 3;
+            }
         }
         return o.toString();
     }
 
     public static List<List<String>> allSplits(String chunk, int n, int cap) {
         List<List<String>> out = new ArrayList<>();
+        // Combinatorial guard: long chunks with many pieces explode
+        // exponentially (and recurse deep). Bail out instead of hanging or
+        // overflowing the stack on hostile/degenerate inputs.
+        if (chunk == null || n <= 0) {
+            if (chunk != null) { List<String> one = new ArrayList<>(); one.add(chunk); out.add(one); }
+            return out;
+        }
+        if ((long) chunk.length() * n > 4096 || chunk.length() > 1024) return out;
         if (n <= 1) { List<String> one = new ArrayList<>(); one.add(chunk); out.add(one); return out; }
         rec(chunk, chunk.length(), n - 1, new ArrayList<>(), out, cap);
         return out;
@@ -167,7 +178,7 @@ public final class Crypto {
     }
 
     public static double scorePrint(String s) {
-        if (s.isEmpty()) return 0.5;
+        if (s.isEmpty()) return 0.0;
         int ok = 0;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);

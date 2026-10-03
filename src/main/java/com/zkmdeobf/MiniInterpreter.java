@@ -12,6 +12,10 @@ public final class MiniInterpreter {
 
     public static final int TRIP_CAP = 20000;
     public static final int STEP_CAP = 4000000;
+    // Single-array allocation ceiling for the emulator. ZKM decrypt tables
+    // are tiny; anything bigger is either hostile input or a bug, and must
+    // Bail instead of OOMing the host.
+    public static final int ARR_CAP = 1 << 20;
 
     public static final class Arr {
         public final Object data;
@@ -138,7 +142,11 @@ public final class MiniInterpreter {
                 }
                 case Opcodes.ILOAD, Opcodes.LLOAD, Opcodes.FLOAD, Opcodes.DLOAD, Opcodes.ALOAD -> {
                     Object v = loc[((VarInsnNode) n).var];
-                    if (v == null && op != Opcodes.ALOAD) throw new Bail("bos-local");
+                    // Uninitialized locals read as the JVM default (null/0);
+                    // pushing Java null would NPE the ArrayDeque and be
+                    // misreported as a bytecode NPE (possibly taking a wrong
+                    // handler). Use the NULL sentinel instead.
+                    if (v == null) v = (op == Opcodes.ALOAD) ? NULL : defaultZero(op);
                     st.push(v); pc++;
                 }
                 case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE, Opcodes.ASTORE -> {
@@ -246,7 +254,7 @@ public final class MiniInterpreter {
                 }
                 case Opcodes.IADD, Opcodes.ISUB, Opcodes.IMUL, Opcodes.IDIV, Opcodes.IREM,
                         Opcodes.IAND, Opcodes.IOR, Opcodes.IXOR -> {
-                    int b = (Integer) st.pop(), a = (Integer) st.pop();
+                    int b = popInt(st), a = popInt(st);
                     st.push(switch (op) {
                         case Opcodes.IADD -> a + b; case Opcodes.ISUB -> a - b;
                         case Opcodes.IMUL -> a * b; case Opcodes.IDIV -> a / b;
@@ -256,19 +264,20 @@ public final class MiniInterpreter {
                     pc++;
                 }
                 case Opcodes.ISHL, Opcodes.ISHR, Opcodes.IUSHR -> {
-                    int b = (Integer) st.pop(), a = (Integer) st.pop();
+                    int b = popInt(st), a = popInt(st);
                     st.push(op == Opcodes.ISHL ? a << b : op == Opcodes.ISHR ? a >> b : a >>> b);
                     pc++;
                 }
-                case Opcodes.INEG -> { st.push(-(Integer) st.pop()); pc++; }
+                case Opcodes.INEG -> { st.push(-popInt(st)); pc++; }
                 case Opcodes.IINC -> {
                     IincInsnNode x = (IincInsnNode) n;
+                    if (!(loc[x.var] instanceof Integer)) throw new Bail("iinc-tip");
                     loc[x.var] = (Integer) loc[x.var] + x.incr;
                     pc++;
                 }
                 case Opcodes.LADD, Opcodes.LSUB, Opcodes.LMUL, Opcodes.LDIV, Opcodes.LREM,
                         Opcodes.LAND, Opcodes.LOR, Opcodes.LXOR -> {
-                    long b = (Long) st.pop(), a = (Long) st.pop();
+                    long b = popLong(st), a = popLong(st);
                     st.push(switch (op) {
                         case Opcodes.LADD -> a + b; case Opcodes.LSUB -> a - b;
                         case Opcodes.LMUL -> a * b; case Opcodes.LDIV -> a / b;
@@ -278,12 +287,12 @@ public final class MiniInterpreter {
                     pc++;
                 }
                 case Opcodes.LSHL, Opcodes.LSHR, Opcodes.LUSHR -> {
-                    int b = (Integer) st.pop();
-                    long a = (Long) st.pop();
+                    int b = popInt(st);
+                    long a = popLong(st);
                     st.push(op == Opcodes.LSHL ? a << b : op == Opcodes.LSHR ? a >> b : a >>> b);
                     pc++;
                 }
-                case Opcodes.LNEG -> { st.push(-(Long) st.pop()); pc++; }
+                case Opcodes.LNEG -> { st.push(-popLong(st)); pc++; }
                 case Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV, Opcodes.FREM -> {
                     float b = toFloat(st.pop()), a = toFloat(st.pop());
                     st.push(switch (op) {
@@ -319,7 +328,7 @@ public final class MiniInterpreter {
                     st.push(r); pc++;
                 }
                 case Opcodes.LCMP -> {
-                    long b = (Long) st.pop(), a = (Long) st.pop();
+                    long b = popLong(st), a = popLong(st);
                     st.push(Long.compare(a, b)); pc++;
                 }
                 case Opcodes.I2L -> { st.push((long) (Integer) st.pop()); pc++; }
@@ -561,7 +570,9 @@ public final class MiniInterpreter {
                     pc++;
                 }
                 case Opcodes.NEWARRAY -> {
-                    int c = (Integer) st.pop();
+                    int c = popInt(st);
+                    if (c < 0) throw new Bail("negatif-dizi");
+                    if (c > ARR_CAP) throw new Bail("dizi-buyuk");
                     int atyp = ((IntInsnNode) n).operand;
                     st.push(new Arr(switch (atyp) {
                         case 4 -> new boolean[c]; case 5 -> new char[c];
@@ -572,7 +583,9 @@ public final class MiniInterpreter {
                     pc++;
                 }
                 case Opcodes.ANEWARRAY -> {
-                    int c = (Integer) st.pop();
+                    int c = popInt(st);
+                    if (c < 0) throw new Bail("negatif-dizi");
+                    if (c > ARR_CAP) throw new Bail("dizi-buyuk");
                     TypeInsnNode t = (TypeInsnNode) n;
                     if (t.desc.equals("java/lang/String")) st.push(new Arr(new String[c]));
                     else if (t.desc.equals("java/lang/Object")) st.push(new Arr(new Object[c]));
@@ -588,15 +601,15 @@ public final class MiniInterpreter {
                     MultiANewArrayInsnNode t = (MultiANewArrayInsnNode) n;
                     int dims = t.dims;
                     int[] counts = new int[dims];
-                    for (int i = dims - 1; i >= 0; i--) counts[i] = (Integer) st.pop();
+                    for (int i = dims - 1; i >= 0; i--) counts[i] = popInt(st);
                     st.push(new Arr(multiArray(t.desc, counts, 0)));
                     pc++;
                 }
                 case Opcodes.CHECKCAST -> {
                     TypeInsnNode t = (TypeInsnNode) n;
                     Object v = st.peek();
-
-                    if (v != NULL && !instanceofCheck(v, t.desc)) {
+                    // Java semantics: null (both null and NULL sentinel) always passes CHECKCAST.
+                    if (v != NULL && v != null && !instanceofCheck(v, t.desc)) {
                         Object syn = new Obj("java/lang/ClassCastException");
                         Integer h = findHandler(m, labels, pc, syn);
                         if (h == null) throw new Bail("checkcast:" + t.desc);
@@ -712,6 +725,7 @@ public final class MiniInterpreter {
 
     private static boolean instanceofCheck(Object v, String desc) {
         if (v == null || v == NULL) return false;
+        if (desc.equals("java/lang/Object")) return true;
         if (v instanceof Arr a) {
             if (!desc.startsWith("[")) {
                 return desc.equals("java/lang/Object") || desc.equals("java/lang/Cloneable")
@@ -737,6 +751,10 @@ public final class MiniInterpreter {
         }
         return switch (desc) {
             case "java/lang/String" -> v instanceof String;
+            case "java/lang/StringBuilder" -> v instanceof StringBuilder;
+            case "java/lang/StringBuffer" -> v instanceof StringBuffer;
+            case "java/lang/Character" -> v instanceof Character || v instanceof Integer;
+            case "java/lang/Boolean" -> v instanceof Boolean || v instanceof Integer;
             case "java/lang/Integer" -> v instanceof Integer;
             case "java/lang/Long" -> v instanceof Long;
             case "java/lang/Float" -> v instanceof Float;
@@ -764,6 +782,20 @@ public final class MiniInterpreter {
         };
     }
 
+    private static int popInt(Deque<Object> st) {
+        if (st.isEmpty()) throw new Bail("yigin-bos");
+        Object o = st.pop();
+        if (o instanceof Integer i) return i;
+        throw new Bail("int-tip");
+    }
+
+    private static long popLong(Deque<Object> st) {
+        if (st.isEmpty()) throw new Bail("yigin-bos");
+        Object o = st.pop();
+        if (o instanceof Long l) return l;
+        throw new Bail("long-tip");
+    }
+
     private static boolean isPseudo(AbstractInsnNode n) {
         return n instanceof LabelNode || n instanceof LineNumberNode || n instanceof FrameNode;
     }
@@ -782,6 +814,15 @@ public final class MiniInterpreter {
             case 'D' -> 0.0;
             case 'Z', 'B', 'C', 'S', 'I' -> 0;
             default -> NULL;
+        };
+    }
+
+    private static Object defaultZero(int loadOp) {
+        return switch (loadOp) {
+            case Opcodes.LLOAD -> 0L;
+            case Opcodes.FLOAD -> 0.0f;
+            case Opcodes.DLOAD -> 0.0;
+            default -> 0;
         };
     }
 
@@ -1325,8 +1366,11 @@ public final class MiniInterpreter {
             if ((mi.name.equals("copyOf") || mi.name.equals("copyOfRange")) && op == Opcodes.INVOKESTATIC)
                 return arraysCopy(mi, args);
             if (mi.name.equals("fill") && op == Opcodes.INVOKESTATIC && arraysFill(mi, args)) return null;
-            if (mi.name.equals("equals") && args.length == 2 && arraysEquals(args)) return 1;
-            if (mi.name.equals("equals") && args.length == 2) return 0;
+            if (mi.name.equals("equals") && args.length == 2) {
+                Boolean eq = arraysEqualsBoxed(args);
+                if (eq == null) throw new Bail("Arrays-equals-unsupported");
+                return eq ? 1 : 0;
+            }
             if (mi.name.equals("toString") && args.length == 1) {
                 Object ao = arrayData(args[0]);
                 if (ao instanceof int[] x) return Arrays.toString(x);
@@ -1353,7 +1397,10 @@ public final class MiniInterpreter {
         if (mi.owner.equals("java/lang/Integer")) {
             if (mi.name.equals("valueOf") && mi.desc.equals("(I)Ljava/lang/Integer;")) return args[0];
             if (mi.name.equals("intValue") && mi.desc.equals("()I")) return recv;
-            if (mi.name.equals("parseInt") ) return Integer.parseInt((String) args[0]);
+            if (mi.name.equals("parseInt") && mi.desc.equals("(Ljava/lang/String;)I"))
+                return Integer.parseInt((String) args[0]);
+            if (mi.name.equals("parseInt") && mi.desc.equals("(Ljava/lang/String;I)I"))
+                return Integer.parseInt((String) args[0], (Integer) args[1]);
             if (mi.name.equals("compare") && mi.desc.equals("(II)I"))
                 return Integer.compare((Integer) args[0], (Integer) args[1]);
             if (mi.name.equals("toString") && mi.desc.equals("(I)Ljava/lang/String;"))
@@ -1665,14 +1712,24 @@ public final class MiniInterpreter {
         return false;
     }
 
-    private static boolean arraysEquals(Object[] args) {
+    private static Boolean arraysEqualsBoxed(Object[] args) {
         Object a = arrayData(args[0]), b = arrayData(args[1]);
         if (a instanceof int[] x && b instanceof int[] y) return Arrays.equals(x, y);
         if (a instanceof long[] x && b instanceof long[] y) return Arrays.equals(x, y);
         if (a instanceof byte[] x && b instanceof byte[] y) return Arrays.equals(x, y);
         if (a instanceof char[] x && b instanceof char[] y) return Arrays.equals(x, y);
+        if (a instanceof boolean[] x && b instanceof boolean[] y) return Arrays.equals(x, y);
+        if (a instanceof short[] x && b instanceof short[] y) return Arrays.equals(x, y);
+        if (a instanceof float[] x && b instanceof float[] y) return Arrays.equals(x, y);
+        if (a instanceof double[] x && b instanceof double[] y) return Arrays.equals(x, y);
         if (a instanceof Object[] x && b instanceof Object[] y) return Arrays.equals(x, y);
-        return false;
+        // Unsupported element type: unknown, never guess false.
+        return null;
+    }
+
+    private static boolean arraysEquals(Object[] args) {
+        Boolean r = arraysEqualsBoxed(args);
+        return r != null && r;
     }
 
     private static String buildString(String desc, Object[] ag) {
@@ -1782,6 +1839,7 @@ public final class MiniInterpreter {
     private static Object multiArray(String desc, int[] counts, int dim) {
         int n = counts[dim];
         if (n < 0) throw new Bail("multianewarray-negatif");
+        if (n > ARR_CAP) throw new Bail("dizi-buyuk");
         char e = desc.charAt(dim + 1);
         if (dim == counts.length - 1) {
             return switch (e) {

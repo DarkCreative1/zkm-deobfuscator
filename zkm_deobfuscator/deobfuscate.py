@@ -23,12 +23,16 @@ def jump_targets(code: bytes) -> set[int]:
                 default = struct.unpack_from(">i", opr, p)[0]
                 lo = struct.unpack_from(">i", opr, p + 4)[0]
                 hi = struct.unpack_from(">i", opr, p + 8)[0]
+                if hi - lo + 1 > 100000 or hi - lo + 1 < 0:
+                    continue
                 out.add(off + default)
                 for i in range(max(hi - lo + 1, 0)):
                     out.add(off + struct.unpack_from(">i", opr, p + 12 + 4 * i)[0])
             else:
                 default = struct.unpack_from(">i", opr, p)[0]
                 np = struct.unpack_from(">i", opr, p + 4)[0]
+                if np > 100000 or np < 0:
+                    continue
                 out.add(off + default)
                 for i in range(max(np, 0)):
                     out.add(off + struct.unpack_from(">i", opr, p + 16 + 8 * i)[0])
@@ -42,7 +46,7 @@ def _cp_append_string(cp_vals: list, enc: dict) -> dict:
         if e and e[0] == 8:
             u = cp_vals[e[1]]
             if u and u[0] == 1:
-                out[u[1].encode("utf-8", "surrogatepass")] = i
+                out[_encode_mutf8(u[1] if isinstance(u[1], str) else u[1].decode("utf-8", "surrogatepass"))] = i
     return out
 
 def _encode_mutf8(s: str) -> bytes:
@@ -87,7 +91,7 @@ def patch_constants(raw: bytes, str_patches: list[tuple[str, str, int, int, str]
         if e[0] == 8:
             u = cp_vals[e[1]]
             if u and u[0] == 1:
-                ub = u[1] if isinstance(u[1], bytes) else u[1].encode("utf-8", "surrogatepass")
+                ub = _encode_mutf8(u[1] if isinstance(u[1], str) else u[1].decode("utf-8", "surrogatepass"))
                 str_index[ub] = i
         elif e[0] == 3:
             int_index[e[1]] = i
@@ -103,7 +107,7 @@ def patch_constants(raw: bytes, str_patches: list[tuple[str, str, int, int, str]
 
     def get_string_idx(text: str) -> int:
         nonlocal nxt, new_entries
-        key = text.encode("utf-8", "surrogatepass")
+        key = _encode_mutf8(text)
         if key in str_index:
             return str_index[key]
         ub = _encode_mutf8(text)
@@ -129,9 +133,15 @@ def patch_constants(raw: bytes, str_patches: list[tuple[str, str, int, int, str]
         int_index[v] = iidx
         return iidx
 
-    code_map: dict[tuple[str, str], tuple[bytes, dict]] = {}
+    code_map: dict[tuple[str, str, int], tuple[bytes, dict]] = {}
+    _seen: dict[tuple[str, str], int] = {}
     for m in RW._iter_methods(raw):
-        code_map[(m["name"], m["desc"])] = (raw[m["code_off"]:m["code_off"] + m["code_len"]], m)
+        key2 = (m["name"], m["desc"])
+        occ = _seen.get(key2, 0)
+        _seen[key2] = occ + 1
+        code_map[(m["name"], m["desc"], occ)] = (raw[m["code_off"]:m["code_off"] + m["code_len"]], m)
+    # Legacy single-key view: first occurrence only; duplicates are skipped, never patched blindly.
+    first_map = {(k[0], k[1]): v for k, v in code_map.items() if k[2] == 0}
 
     out = bytearray(raw)
     skipped: list[str] = []
@@ -141,10 +151,14 @@ def patch_constants(raw: bytes, str_patches: list[tuple[str, str, int, int, str]
         nonlocal applied
         for name, desc, start, end, val in patches:
             key = (name, desc)
-            if key not in code_map:
+            if key not in first_map:
                 skipped.append(f"{name}{desc}@[{start},{end}): method absent")
                 continue
-            code, m = code_map[key]
+            # Overloaded/bridge duplicates: never patch blindly, skip as ambiguous.
+            if _seen.get(key, 0) > 1:
+                skipped.append(f"{name}{desc}@[{start},{end}): ambiguous overload")
+                continue
+            code, m = first_map[key]
             span = end - start
             idx = get_string_idx(val) if is_str else get_int_idx(val)
             need = 3 if idx > 255 else 2
@@ -155,10 +169,8 @@ def patch_constants(raw: bytes, str_patches: list[tuple[str, str, int, int, str]
             tgts = jump_targets(code)
             inside = sorted(t for t in tgts if start < t < end)
             ldc_at = start
-            if any(t == start for t in tgts):
-                pass
             if inside:
-                if len(set(inside)) == 1:
+                if len(inside) == 1:
 
                     ldc_at = inside[0]
                 else:

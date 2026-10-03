@@ -1400,6 +1400,228 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         System.out.println("multi-lookup OK");
     }
 
+    public static void testStackSizesWidening() {
+        // I2L/I2D/F2L/F2D pop one word and push two; L2D/D2L are 2->2.
+        // A wrong [2,2] here corrupts producer search depth tracking.
+        org.objectweb.asm.tree.MethodNode m = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "f", "()V", null, null);
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_5));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.I2L));
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.LSTORE, 1));
+        java.util.List<AbstractInsnNode> ins = ClassIO.list(m);
+        int[] s = Rewriter.stackSizes(ins.get(1));
+        check(s[0] == 1 && s[1] == 2, "i2l-stack=" + s[0] + "," + s[1]);
+        m.instructions.clear();
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.FCONST_1));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.F2D));
+        s = Rewriter.stackSizes(ClassIO.list(m).get(1));
+        check(s[0] == 1 && s[1] == 2, "f2d-stack=" + s[0] + "," + s[1]);
+        System.out.println("stack-sizes OK");
+    }
+
+    public static void testFindProducerIincBarrier() {
+        // ILOAD x; IINC x; ISTORE y must not resolve to the stale pre-IINC value.
+        org.objectweb.asm.tree.MethodNode m = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "f", "()V", null, null);
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ILOAD, 1));
+        m.instructions.add(new org.objectweb.asm.tree.IincInsnNode(1, 1));
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ISTORE, 2));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.RETURN));
+        java.util.List<AbstractInsnNode> ins = ClassIO.list(m);
+        check(Rewriter.findProducer(ins, 2) == null, "iinc-bariyer-missing");
+        System.out.println("iinc-barrier OK");
+    }
+
+    public static void testPatchPurity() {
+        // A decrypt range containing a real call must be vetoed, never silently dropped.
+        org.objectweb.asm.tree.MethodNode m = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "f", "()V", null, null);
+        org.objectweb.asm.tree.LdcInsnNode from =
+                new org.objectweb.asm.tree.LdcInsnNode("enc");
+        org.objectweb.asm.tree.MethodInsnNode evil =
+                new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC,
+                        "t/Evil", "run", "()V", false);
+        org.objectweb.asm.tree.MethodInsnNode call =
+                new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC,
+                        "t/X", "dec", "(Ljava/lang/String;)Ljava/lang/String;", false);
+        m.instructions.add(from);
+        m.instructions.add(evil);
+        m.instructions.add(call);
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.POP));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.RETURN));
+        check(!Rewriter.patchCallSite(m, from, call, "plain"), "sidefx-patch-yazildi");
+        boolean kept = false;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext())
+            if (n instanceof MethodInsnNode mi && mi.name.equals("run")) kept = true;
+        check(kept, "sidefx-cagri-silindi");
+        System.out.println("patch-purity OK");
+    }
+
+    public static void testDropOrphanKeepsLineNumbers() {
+        org.objectweb.asm.tree.MethodNode m = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "f", "()I", null, null);
+        org.objectweb.asm.tree.LabelNode l0 = new org.objectweb.asm.tree.LabelNode();
+        org.objectweb.asm.tree.LabelNode lLine = new org.objectweb.asm.tree.LabelNode();
+        m.instructions.add(l0);
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_1));
+        m.instructions.add(lLine);
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.IRETURN));
+        m.instructions.add(new org.objectweb.asm.tree.LineNumberNode(10, lLine));
+        Rewriter.dropOrphanLabels(m);
+        boolean kept = false;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext())
+            if (n == lLine) kept = true;
+        check(kept, "linenumber-label-silindi");
+        ClassNode cn = new ClassNode();
+        cn.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "t/L", null, "java/lang/Object", null);
+        cn.methods.add(m);
+        ClassIO.toBytes(cn);
+        System.out.println("linenumber-label OK");
+    }
+
+    public static void testCallerPushPatternRejected() {
+        // Standard javac new-Object[]{...} callers push fresh values INSIDE the
+        // array range; deleting the range would drop the arguments, so the
+        // rewrite must refuse.
+        ClassNode cn = new ClassNode();
+        cn.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "syn/P", null, "java/lang/Object", null);
+        org.objectweb.asm.tree.MethodNode m = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "caller", "()V", null, null);
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_1));
+        m.instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.DUP));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_0));
+        m.instructions.add(new org.objectweb.asm.tree.LdcInsnNode("fresh-arg"));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.AASTORE));
+        m.instructions.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC,
+                "syn/P", "foo", "([Ljava/lang/Object;)V", false));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.RETURN));
+        cn.methods.add(m);
+        java.util.Map<String, ClassNode> classes = new java.util.HashMap<>();
+        classes.put("syn/P.class", cn);
+        java.util.Map<String, String> nd = new java.util.HashMap<>();
+        nd.put("syn/P.foo([Ljava/lang/Object;)V", "(Ljava/lang/String;)V");
+        check(ParamRestorer.rewriteCallers(classes, nd) == 0, "push-pattern-written");
+        System.out.println("caller-pattern OK");
+    }
+
+    public static void testCalleeSlotRelocation() {
+        // Unpack widens an Object store into a long parameter while a
+        // temporary sits in the overlapping slot: the temp must move, not alias.
+        ClassNode cn = new ClassNode();
+        cn.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "syn/P", null, "java/lang/Object", null);
+        org.objectweb.asm.tree.MethodNode m = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "foo", "([Ljava/lang/Object;)J", null, null);
+        // ZKM prolog shape: ALOAD 0, DUP, [..], AALOAD, CHECKCAST, ASTORE 1, POP
+        // Temp deliberately sits AT slot 1..2: the widened J param would alias it.
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 0));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.DUP));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_0));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.AALOAD));
+        m.instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.CHECKCAST, "java/lang/Long"));
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ASTORE, 1));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.POP));
+        // temp long in slot 1..2 (collides with J param slots 0..1? slot 1 is shared)
+        m.instructions.add(new org.objectweb.asm.tree.LdcInsnNode(7L));
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.LSTORE, 1));
+        // use: unbox local 1, add temp, return
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 1));
+        m.instructions.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKEVIRTUAL,
+                "java/lang/Long", "longValue", "()J", false));
+        m.instructions.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.LLOAD, 1));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.LADD));
+        m.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.LRETURN));
+        cn.methods.add(m);
+        ParamRestorer.Plan p = ParamRestorer.analyze(cn, m);
+        check(p != null && p.newDesc().equals("(J)J"), "reloc-plan: " + (p == null ? "null" : p.newDesc()));
+        // The temp shares slots 2..3 with nothing, but slot 1 of the unpack
+        // feeds the J param: slot 2..3 temp is adjacent, so the rewrite is
+        // safe ONLY when the temp doesn't overlap; here it must either
+        // succeed cleanly or refuse, never alias.
+        boolean ok = ParamRestorer.rewriteCallee(cn, p);
+        if (!ok) {
+            check(m.desc.equals("([Ljava/lang/Object;)J"), "reloc-desc: " + m.desc);
+            System.out.println("callee-relocation OK (refused cleanly)");
+            return;
+        }
+        check(m.desc.equals("(J)J"), "reloc-desc: " + m.desc);
+        // No store to slot 0/1 may remain: the only local traffic in the new
+        // parameter block is writing/reading the J param itself.
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n instanceof org.objectweb.asm.tree.VarInsnNode v
+                    && (v.getOpcode() == Opcodes.ISTORE || v.getOpcode() == Opcodes.LSTORE
+                        || v.getOpcode() == Opcodes.ASTORE || v.getOpcode() == Opcodes.FSTORE
+                        || v.getOpcode() == Opcodes.DSTORE)
+                    && (v.var == 0 || v.var == 1)) {
+                check(false, "slot-aliasing op=" + n.getOpcode() + " var=" + v.var);
+            }
+        }
+        // And the rewritten method must still verify.
+        ClassIO.toBytes(cn);
+        System.out.println("callee-relocation OK");
+    }
+
+    public static void testNativeSkipped() {
+        ClassNode cn = new ClassNode();
+        cn.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "syn/N", null, "java/lang/Object", null);
+        org.objectweb.asm.tree.MethodNode nat = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_NATIVE,
+                "foo", "([Ljava/lang/Object;)V", null, null);
+        cn.methods.add(nat);
+        check(ParamRestorer.analyze(cn, nat) == null, "native-analiz-edildi");
+        org.objectweb.asm.tree.MethodNode nm = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_NATIVE, "ab", "()V", null, null);
+        cn.methods.add(nm);
+        java.util.Map<String, ClassNode> classes = new java.util.HashMap<>();
+        classes.put("syn/N.class", cn);
+        check(!Renamer.buildMapping(classes, null).containsKey("syn/N.ab()V"), "native-renamed");
+        System.out.println("native-skip OK");
+    }
+
+    public static void testDeadMethodEnumGuard() {
+        // Plural reflective enumeration keeps ordinary private methods, but
+        // ZKM (IJ) helpers must still go so tables can die.
+        ClassNode cn = new ClassNode();
+        cn.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, "syn/E", null, "java/lang/Object", null);
+        org.objectweb.asm.tree.MethodNode en = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "e", "()V", null, null);
+        en.instructions.add(new org.objectweb.asm.tree.LdcInsnNode(
+                org.objectweb.asm.Type.getType("Lsyn/E;")));
+        en.instructions.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKEVIRTUAL,
+                "java/lang/Class", "getDeclaredMethods", "()[Ljava/lang/reflect/Method;", false));
+        en.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.POP));
+        en.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.RETURN));
+        cn.methods.add(en);
+        org.objectweb.asm.tree.MethodNode real = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "helper", "()V", null, null);
+        real.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.RETURN));
+        cn.methods.add(real);
+        org.objectweb.asm.tree.MethodNode lk = new org.objectweb.asm.tree.MethodNode(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC, "a", "(IJ)I", null, null);
+        lk.instructions.add(new org.objectweb.asm.tree.LdcInsnNode(100L));
+        lk.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.LAND));
+        lk.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.L2I));
+        lk.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.IXOR));
+        lk.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_1));
+        lk.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.IXOR));
+        lk.instructions.add(new org.objectweb.asm.tree.InsnNode(Opcodes.IRETURN));
+        cn.methods.add(lk);
+        java.util.Map<String, ClassNode> classes = new java.util.HashMap<>();
+        classes.put("syn/E.class", cn);
+        Rewriter.removeDeadMethods(classes);
+        check(ClassIO.findMethod(cn, "helper", "()V") != null, "enum-korumasi-missing");
+        check(ClassIO.findMethod(cn, "a", "(IJ)I") == null, "zkm-helper-kaldi");
+        System.out.println("enum-guard OK");
+    }
+
+    public static void testNoDynFlag() throws Exception {
+        // --no-dyn must still produce a verified jar (static recovery only).
+        String out = "build/test-tmp/_nodyn.jar";
+        String log = runCli("corpus/fixtures/demo2-obf.jar", "-o", out, "--no-dyn");
+        check(log.contains("verify: OK"), "no-dyn-verify: " + log);
+        System.out.println("no-dyn OK");
+    }
+
     public static void testParamSlotGuard() {
 
         ClassNode cn = new ClassNode();
@@ -2198,6 +2420,24 @@ check(DesStrings.desInnerEncrypt("1234567", key).length() == 8, "des-blok");
         testIfNullStrict();
         System.out.println("[step] testMultiLookupNames");
         testMultiLookupNames();
+        System.out.println("[step] testStackSizesWidening");
+        testStackSizesWidening();
+        System.out.println("[step] testFindProducerIincBarrier");
+        testFindProducerIincBarrier();
+        System.out.println("[step] testPatchPurity");
+        testPatchPurity();
+        System.out.println("[step] testDropOrphanKeepsLineNumbers");
+        testDropOrphanKeepsLineNumbers();
+        System.out.println("[step] testCallerPushPatternRejected");
+        testCallerPushPatternRejected();
+        System.out.println("[step] testCalleeSlotRelocation");
+        testCalleeSlotRelocation();
+        System.out.println("[step] testNativeSkipped");
+        testNativeSkipped();
+        System.out.println("[step] testDeadMethodEnumGuard");
+        testDeadMethodEnumGuard();
+        System.out.println("[step] testNoDynFlag");
+        testNoDynFlag();
         System.out.println("[step] testParamSlotGuard");
         testParamSlotGuard();
         System.out.println("[step] testCallerSizeRequired");

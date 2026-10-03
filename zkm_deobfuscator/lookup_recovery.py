@@ -40,6 +40,8 @@ def clinit_table_sizes(cf: ClassFile) -> list[int]:
             cidx = (opr[0] << 8) | opr[1]
             e = cf.cp[cidx]
             if e and e.tag == 7 and cf.utf8(e.value) == "java/lang/String":
+                if k == 0:
+                    continue
                 v = _const_push(*ins[k - 1][1:])
                 if v is not None and v > 0:
                     out.append(v)
@@ -142,6 +144,10 @@ def _ldc_int(cf: ClassFile, op: int, opr: bytes) -> int | None:
     return None
 
 def inner_decrypt(enc_piece: str, key: int, shuffle: list[int]) -> str:
+    if not enc_piece:
+        return ""
+    if not shuffle or len(shuffle) < 256:
+        raise ValueError("bad shuffle")
     ku = key & 0xFFFF
     k0, k1 = ku & 255, (ku >> 8) & 255
     off = shuffle[ord(enc_piece[0]) & 255]
@@ -157,7 +163,7 @@ def inner_decrypt(enc_piece: str, key: int, shuffle: list[int]) -> str:
 
 def _print_score(s: str) -> float:
     if not s:
-        return 0.5
+        return 0.0
     return sum(1 for c in s if c.isprintable() or c in "\n\t\r") / len(s)
 
 def _ascii_score(s: str) -> float:
@@ -328,7 +334,7 @@ def recover_class_strings(cf: ClassFile) -> dict:
         score /= max(len(sites), 1)
         asc /= max(len(sites), 1)
         bkey = (round(asc, 4), round(score, 4))
-        if best is None or bkey > (round(best[0], 4), round(best[3], 4)):
+        if best is None or bkey > (round(best[3], 4), round(best[0], 4)):
             best = (score, plains, [len(s) for s in combo], asc)
     if best and best[3] > 0.6:
         res["plaintexts"] = best[1]

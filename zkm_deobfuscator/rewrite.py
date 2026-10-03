@@ -148,10 +148,20 @@ def strip_fake_handlers(data: bytes) -> tuple[bytes, dict]:
     cur = data
     counts: dict = {}
     for (name, desc), idxs in fakes.items():
-        before = list_exception_entries(cur, name, desc)
-        cur = remove_exception_entries(cur, name, desc, idxs)
-        after = list_exception_entries(cur, name, desc)
-        assert len(after) == len(before) - len(idxs)
+        try:
+            before = list_exception_entries(cur, name, desc)
+        except (KeyError, ValueError):
+            continue
+        try:
+            cur = remove_exception_entries(cur, name, desc, idxs)
+        except (KeyError, ValueError):
+            continue
+        try:
+            after = list_exception_entries(cur, name, desc)
+        except (KeyError, ValueError):
+            continue
+        if len(after) != len(before) - len(idxs):
+            raise RuntimeError(f"handler strip mismatch for {name}{desc}")
         counts[f"{name}{desc}"] = len(idxs)
     return cur, counts
 

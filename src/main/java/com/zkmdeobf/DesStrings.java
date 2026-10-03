@@ -12,12 +12,16 @@ public final class DesStrings {
     }
 
     public static long recoverLongStatic(int arg, long key, long mask, int xor, long[] enc) {
-        int idx = (int) (arg ^ (key & mask) ^ xor);
-        return enc[idx] ^ key;
+        if (enc == null) throw new IllegalArgumentException("enc==null");
+        long l = (arg ^ (key & mask) ^ xor);
+        if (l < 0 || l >= enc.length) throw new IllegalArgumentException("idx out of range: " + l);
+        return enc[(int) l] ^ key;
     }
 
     public static int recoverIntStatic(int arg, long key, long mask, int xor, long[] enc) {
-        int idx = (int) (arg ^ (key & mask) ^ xor);
-        return (int) (enc[idx] ^ key);
+        if (enc == null) throw new IllegalArgumentException("enc==null");
+        long l = (arg ^ (key & mask) ^ xor);
+        if (l < 0 || l >= enc.length) throw new IllegalArgumentException("idx out of range: " + l);
+        return (int) (enc[(int) l] ^ key);
     }
 }

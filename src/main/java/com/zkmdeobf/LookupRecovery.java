@@ -11,6 +11,7 @@ public final class LookupRecovery {
     public record LookupParams(int indexXor, int[] shuffle) {}
 
     public static LookupParams params(MethodNode lookup) {
+        if (lookup == null) return null;
         List<AbstractInsnNode> ins = ClassIO.list(lookup);
         List<AbstractInsnNode> real = new ArrayList<>();
         for (AbstractInsnNode n : ins) {
@@ -33,7 +34,8 @@ public final class LookupRecovery {
         for (AbstractInsnNode n : ins) {
             if (n.getOpcode() != Opcodes.TABLESWITCH) continue;
             TableSwitchInsnNode t = (TableSwitchInsnNode) n;
-            if (t.max - t.min + 1 < 200) continue;
+            long span = (long) t.max - (long) t.min + 1;
+            if (span < 200 || span > 4096) continue;
             List<LabelNode> order = new ArrayList<>(t.labels);
             order.add(t.dflt);
             List<Integer> vals = new ArrayList<>();
@@ -43,10 +45,19 @@ public final class LookupRecovery {
                 while (cur != null && (cur instanceof LabelNode || cur instanceof LineNumberNode || cur instanceof FrameNode))
                     cur = cur.getNext();
                 Integer v = cur == null ? null : ClassIO.constInt(cur);
-                if (v == null) { ok = false; break; }
+                if (v == null || v < 0 || v > 255) { ok = false; break; }
                 vals.add(v & 0xFF);
             }
             if (ok && vals.size() >= 256) {
+                // Must be a permutation of 0..255; otherwise it is not a shuffle table.
+                boolean[] seen = new boolean[256];
+                boolean perm = true;
+                for (int i = 0; i < 256; i++) {
+                    int v = vals.get(i);
+                    if (seen[v]) { perm = false; break; }
+                    seen[v] = true;
+                }
+                if (!perm) continue;
                 shuffle = new int[256];
                 for (int i = 0; i < 256; i++) shuffle[i] = vals.get(i);
                 break;
@@ -56,7 +67,9 @@ public final class LookupRecovery {
         return new LookupParams(indexXor & 0xFFFF, shuffle);
     }
 
-    public static String innerDecrypt(String enc, int key, int[] shuffle) {        int ku = key & 0xFFFF;
+    public static String innerDecrypt(String enc, int key, int[] shuffle) {
+        if (enc == null || enc.isEmpty() || shuffle == null || shuffle.length < 256) return "";
+        int ku = key & 0xFFFF;
         int k0 = ku & 255, k1 = (ku >> 8) & 255;
         int off = shuffle[enc.charAt(0) & 255];
         int[] bb = {(k0 - off) & 255, (k1 - off) & 255};
@@ -196,7 +209,11 @@ public final class LookupRecovery {
             List<Cand> cands = new ArrayList<>();
             for (int ci = 0; ci < chunks.size(); ci++) {
                 String ch = chunks.get(ci);
-                for (int[] iv : validIntervals(ch, 40)) {
+                // Cap per-chunk work: interval enumeration is O(L^2) and each
+                // candidate runs a decrypt+score. Huge chunks would stall the
+                // whole class on a single call site.
+                if (ch.length() > 512) continue;
+                for (int[] iv : validIntervals(ch, ch.length())) {
                     String piece = ch.substring(iv[0], iv[1]);
                     String pl;
                     try {
@@ -237,6 +254,8 @@ public final class LookupRecovery {
             for (Cand c : perSite.get(w)) {
                 boolean clash = false;
                 for (int[] t : taken) {
+                    // Same chunk+same span shared by two call sites is legal reuse.
+                    if (t[0] == c.ci && t[1] == c.s && t[2] == c.e) continue;
                     if (t[0] == c.ci && !(c.e <= t[1] || c.s >= t[2])) { clash = true; break; }
                 }
                 if (!clash) {
@@ -254,7 +273,9 @@ public final class LookupRecovery {
     static boolean tooBig(List<List<List<String>>> cand, int perChunkCap) {
         long prod = 1;
         for (List<List<String>> perN : cand) {
-            prod *= Math.max(Math.min(perN.size(), perChunkCap), 1);
+            long sz = Math.max(Math.min(perN.size(), perChunkCap), 1);
+            if (prod > 250000 / sz) return true;
+            prod *= sz;
             if (prod > 250000) return true;
         }
         return false;
