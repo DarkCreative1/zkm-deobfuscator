@@ -14,6 +14,13 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+zkm_deobfuscator/
+tests/
+scripts/
+pyproject.toml
+requirements.txt
+
+# Local-only Python implementation kept out of the public tree
 
 # IDE
 .idea/

@@ -46,14 +46,6 @@ tasks.register('corpusTest', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
 }
 
-tasks.register('pyTest', Exec) {
-    group = 'verification'
-    description = 'Runs the Python analysis test suite.'
-    dependsOn tasks.named('classes'), tasks.named('testClasses')
-    workingDir = projectDir
-    commandLine 'python', 'scripts/run_python_tests.py'
-}
-
 def corpusSets = ['demo1-zkm27', 'demo2-zkm27', 'demo3-zkm27',
                  'demo1-zkm13', 'demo2-zkm13', 'demo3-zkm13']
 
@@ -80,7 +72,6 @@ tasks.register('deobfuscateAll') {
 
 tasks.named('check') {
     dependsOn 'corpusTest'
-    dependsOn 'pyTest'
 }
 
 def asmJars = configurations.runtimeClasspath

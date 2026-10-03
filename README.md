@@ -2,7 +2,6 @@
 
 [![Java](https://img.shields.io/badge/java-17%2B-ED8B00?logo=openjdk&logoColor=white)](https://adoptium.net/)
 [![ASM](https://img.shields.io/badge/asm-9.8-00599C?logo=openjdk&logoColor=white)](https://asm.ow2.io/)
-[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 [![CI](https://github.com/DarkCreative1/zkm-deobfuscator/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkCreative1/zkm-deobfuscator/actions/workflows/ci.yml)
 
@@ -148,17 +147,13 @@ Everything below runs against the checked-in corpus and is wired into
 `./gradlew check`.
 
 ```bash
-./gradlew check             # Java assertion suite + Python suite
-./gradlew corpusTest        # 249 assertions (Java)
-./gradlew pyTest            # 7 test modules (Python)
+./gradlew check             # Java assertion suite
+./gradlew corpusTest        # Java corpus assertions
 ./gradlew deobfuscateAll    # regenerate every corpus/jars/*/deobf.jar
-
-python scripts/verify_corpus.py
 ```
 
-`scripts/verify_corpus.py` is an independent check. It re-deobfuscates every
-corpus jar from scratch, runs both the original and the result, and compares
-class, field and method signatures:
+The Java assertion suite re-deobfuscates every corpus jar, runs both the
+original and the result, and compares class, field and method signatures.
 
 ```
 corpus       main            verify  run   1:1   skipped  status
@@ -298,12 +293,6 @@ build.gradle, settings.gradle, gradlew     Gradle build
 lib/                                       ASM 9.8 (vendored, no network needed)
 src/main/java/com/zkmdeobf/                Java implementation
 src/test/java/                             assertion suite
-zkm_deobfuscator/                          Python implementation
-tests/                                     Python test modules
-scripts/build_corpus.py                    rebuild the corpus with a given ZKM
-scripts/verify_corpus.py                   independent 1:1 verification
-scripts/run_python_tests.py                Python suite entry point
-scripts/retarget_corpus.py                 lower bundled corpus bytecode to Java 17
 corpus/src/demo1|demo2|demo3/              corpus sources
 corpus/jars/<demo>-zkm<ver>/               original.jar, obf.jar, deobf.jar
 corpus/changelogs/                         ZKM changelog output
@@ -353,14 +342,9 @@ corpus/
   obfuscate/                       ZKM .zkm scripts
 ```
 
-Rebuild the corpus from scratch with your own ZKM:
-
-```bash
-python scripts/build_corpus.py --zkm /path/to/ZKM.jar --tag zkm27 \
-        --extra encryptIntegerConstants=aggressive \
-        --extra encryptLongConstants=normal \
-        --extra obfuscateParameters=normal
-```
+The bundled corpus is produced from `corpus/src/` using the ZKM scripts under
+`corpus/obfuscate/`. The current build is kept in `corpus/jars/` and
+`corpus/changelogs/`.
 
 ### ZKM version differences
 
@@ -385,17 +369,10 @@ ZKM 13 never applies those transformations, so there is nothing to reverse.
 ## Requirements
 
 - JDK 17 or newer
-- Python 3.9 or newer, for the Python implementation and test suite
-- `pycryptodome`, optional; the tool falls back to a pure-Python DES
 
 Java 17 is the minimum. CI runs the whole suite on both JDK 17 and JDK 21, and
 the bundled corpus is compiled to Java 17 bytecode so it loads on the oldest
 supported runtime.
-
-```bash
-pip install -r requirements.txt          # optional, for the Python side
-pip install .                            # or install the Python package
-```
 
 ASM is vendored under `lib/`, so building the Java side requires no network
 access.

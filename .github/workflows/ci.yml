@@ -28,11 +28,6 @@ jobs:
           distribution: temurin
           java-version: ${{ matrix.java }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -41,9 +36,6 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle') }}
           restore-keys: gradle-${{ runner.os }}-
-
-      - name: Install Python dependencies
-        run: python -m pip install --upgrade pip -r requirements.txt
 
       - name: Compile
         run: ./gradlew compileJava compileTestJava --no-daemon
@@ -63,25 +55,12 @@ jobs:
           fi
           exit $rc
 
-      - name: Python test suite
-        run: |
-          ./gradlew pyTest --no-daemon > /tmp/py-tests.log 2>&1 \
-            || { echo "===== py-tests.log (tail) ====="; tail -40 /tmp/py-tests.log; exit 1; }
-          tail -10 /tmp/py-tests.log
-
       - name: Independent corpus verification
+        if: always()
         run: |
-          set +e
-          python scripts/verify_corpus.py > /tmp/verify.log 2>&1
-          rc=$?
-          tail -12 /tmp/verify.log
-          if [ "$rc" -ne 0 ]; then
-            echo ""
-            echo "FAILURE-DETAIL:"
-            tail -c 1200 /tmp/verify.log | tr '\n' '~' | sed 's/~/ | /g'
-            echo ""
-          fi
-          exit $rc
+          ./gradlew corpusTest --no-daemon > /tmp/verify.log 2>&1 \
+            || { echo "===== verify.log (tail) ====="; tail -40 /tmp/verify.log; exit 1; }
+          tail -10 /tmp/verify.log
 
       - name: Corpus inventory
         if: always()

@@ -31,14 +31,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python dependencies
-        run: python -m pip install --upgrade pip -r requirements.txt
-
       - name: Resolve version
         id: version
         run: |
@@ -75,7 +67,6 @@ jobs:
           ./gradlew build --no-daemon "-Pversion=${{ steps.version.outputs.version }}"
           java -Xmx3g -cp "build/classes/java/main:build/classes/java/test:lib/asm-9.8.jar:lib/asm-tree-9.8.jar:lib/asm-commons-9.8.jar" \
                com.zkmdeobf.AllTests
-          python scripts/verify_corpus.py
 
       - name: Build the runnable jar
         run: |
