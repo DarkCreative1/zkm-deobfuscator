@@ -21,13 +21,13 @@ Download the self-contained jar from the
 [releases page](https://github.com/DarkCreative1/zkm-deobfuscator/releases):
 
 ```bash
-java -jar zkm-deobfuscator-<version>-all.jar input.jar -o output.jar
+java -jar zkm-deobfuscator-1.0.3-all.jar input.jar -o output.jar
 ```
 
 Restore exact original member names with the ZKM changelog:
 
 ```bash
-java -jar zkm-deobfuscator-<version>-all.jar input.jar -o output.jar --map changelog.txt
+java -jar zkm-deobfuscator-1.0.3-all.jar input.jar -o output.jar --map changelog.txt
 ```
 
 Build from source:
@@ -41,7 +41,7 @@ Create the runnable jar yourself:
 
 ```bash
 ./gradlew fatJar
-java -jar build/libs/zkm-deobfuscator-<version>-all.jar input.jar -o output.jar
+java -jar build/libs/zkm-deobfuscator-1.0.3-all.jar input.jar -o output.jar
 ```
 
 ---
@@ -49,9 +49,9 @@ java -jar build/libs/zkm-deobfuscator-<version>-all.jar input.jar -o output.jar
 ## CLI
 
 ```bash
-java -jar zkm-deobfuscator-<version>-all.jar
-java -jar zkm-deobfuscator-<version>-all.jar --help
-java -jar zkm-deobfuscator-<version>-all.jar --version
+java -jar zkm-deobfuscator-1.0.3-all.jar
+java -jar zkm-deobfuscator-1.0.3-all.jar --help
+java -jar zkm-deobfuscator-1.0.3-all.jar --version
 ```
 
 Main options:
